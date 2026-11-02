@@ -30,3 +30,13 @@ Your lantern is slowly going out. Collect embers to keep its light burning. Wrai
 | Cinder Thief | ~28s | Harmless, but eats embers and runs from your lantern | Chase it down or flare it to win back +2 points and light per stolen ember |
 | Lurker | ~42s | Hides in the dark; its red eyes flash before it lunges | Sidestep the lunge or flare it (+2) |
 | Hollow | ~65s | Big and slow, takes two flares, hits hard and drains your light while near | Keep your distance, flare twice (+5) |
+
+**Bosses** rise from the dark at 50 seconds and then 70 seconds after each one is defeated. A warning plays first. The three bosses rotate, and each pass through the cycle gives them more health and makes them more aggressive:
+
+| Boss | Attacks | How to beat it |
+|---|---|---|
+| The Matriarch | Circles you, releases Ashmoth swarms, then screeches and dive-bombs | Dodge the dive, then flare her while she's close |
+| The Eclipse | Fires rings of dark orbs and periodically halves your light radius | Flares destroy orbs. Slip through the gaps and strike |
+| The Devourer | A serpent that chases you, spits fireballs and eats embers to heal | Only its head can be hurt. Its body hurts too, so don't get boxed in |
+
+Only flares damage a boss. While a boss is out, extra embers spawn to fuel your flares, and regular enemies arrive less often. Defeating one gives bonus points, fully restores your light and drops two power-ups.

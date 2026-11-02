@@ -42,7 +42,12 @@
     <strong>Wraiths</strong> creep in from the dark, and each touch drains your light.<br><br>
     <strong>Move:</strong> WASD / arrow keys / mouse, or drag on touch screens<br>
     <strong>Flare:</strong> Space or click. Spend light to burn away nearby wraiths.<br>
-    <strong>Sound:</strong> M to mute</p>
+    <strong>Sound:</strong> M to mute<br><br>
+    <strong>Power-ups</strong> appear now and then. Grab them before they fade:<br>
+    <span style="color:#7fc8ff">Ward</span> blocks one hit &middot;
+    <span style="color:#8dffa8">Swift</span> speed boost &middot;
+    <span style="color:#d6f2ff">Stillness</span> freezes wraiths &middot;
+    <span style="color:#ff8fd0">Lure</span> pulls in embers</p>
   <button id="start">BEGIN</button>
 </div>
 <script>
@@ -131,11 +136,33 @@
       tone(160, .45, { type: 'sawtooth', vol: .22, to: 50 });
       noise(.3, { vol: .3, from: 1200, to: 200 });
     },
+    power(kind) {
+      const base = { ward: 392, swift: 523, freeze: 659, magnet: 440 }[kind];
+      [0, 7, 12, 19].forEach((n, i) => tone(base * 2 ** (n / 12), .3, { type: 'triangle', vol: .14, delay: i * .05 }));
+      if (kind === 'freeze') noise(.6, { vol: .12, from: 6000, to: 2500, type: 'highpass' });
+      if (kind === 'swift') noise(.3, { vol: .15, from: 600, to: 3000, type: 'bandpass' });
+    },
+    wardBreak() {
+      tone(880, .5, { type: 'square', vol: .08, to: 220 }); tone(1320, .3, { vol: .1, to: 660 });
+      noise(.25, { vol: .25, from: 4000, to: 800, type: 'bandpass' });
+    },
+    expire() { tone(600, .2, { type: 'sine', vol: .08, to: 300 }); },
     heart() { tone(70, .15, { vol: .35, to: 45 }); tone(65, .15, { vol: .25, to: 40, delay: .16 }); },
     over() { [12, 7, 3, 0].forEach((n, i) => tone(220 * 2 ** (n / 12), .7, { type: 'triangle', vol: .16, delay: i * .22 })); },
   };
 
   const MAX_LIGHT = 100;
+  // ---------- Power-ups ----------
+  const POWERS = {
+    ward:   { name: 'WARD',      color: '127,200,255', dur: 12, glyph: 'shield' },
+    swift:  { name: 'SWIFT',     color: '141,255,168', dur: 7,  glyph: 'bolt' },
+    freeze: { name: 'STILLNESS', color: '214,242,255', dur: 4.5, glyph: 'flake' },
+    magnet: { name: 'LURE',      color: '255,143,208', dur: 9,  glyph: 'lure' },
+  };
+  const POWER_KEYS = Object.keys(POWERS);
+  const POWER_LIFETIME = 9; // seconds a power-up waits on the ground
+  let powerups = [], puT, active, popups = [];
+
   let state = 'menu', player, embers, wraiths, particles, score, time, spawnT, shake;
   const keys = {};
   let pointer = null, touching = false;
@@ -144,6 +171,7 @@
     player = { x: W / 2, y: H / 2, vx: 0, vy: 0, light: MAX_LIGHT, hurt: 0, flareCd: 0 };
     embers = []; wraiths = []; particles = [];
     score = 0; time = 0; spawnT = 1.5; shake = 0;
+    powerups = []; popups = []; puT = 7; active = { ward: 0, swift: 0, freeze: 0, magnet: 0 };
     for (let i = 0; i < 5; i++) spawnEmber();
     $('score').textContent = 0;
   }
@@ -159,6 +187,34 @@
     const y = side === 2 ? -m : side === 3 ? H + m : rand(0, H);
     const speed = rand(38, 58) + Math.min(time * 1.2, 70);
     wraiths.push({ x, y, speed, wob: rand(0, 6.28), r: rand(13, 19) });
+  }
+  function spawnPowerup() {
+    // prefer a spot not right on top of the player
+    let x, y, tries = 0;
+    do { x = rand(50, W - 50); y = rand(70, H - 50); } while (Math.hypot(x - player.x, y - player.y) < 140 && ++tries < 10);
+    const kind = POWER_KEYS[Math.floor(Math.random() * POWER_KEYS.length)];
+    powerups.push({ x, y, kind, life: POWER_LIFETIME, t: 0 });
+  }
+  function drawGlyph(kind, x, y, s, a) {
+    ctx.save(); ctx.translate(x, y);
+    ctx.strokeStyle = `rgba(20,16,30,${a})`; ctx.fillStyle = `rgba(20,16,30,${a})`;
+    ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    if (kind === 'ward') {
+      ctx.moveTo(0, -s); ctx.lineTo(s * .8, -s * .55); ctx.lineTo(s * .65, s * .35);
+      ctx.lineTo(0, s); ctx.lineTo(-s * .65, s * .35); ctx.lineTo(-s * .8, -s * .55); ctx.closePath(); ctx.stroke();
+    } else if (kind === 'swift') {
+      ctx.moveTo(s * .3, -s); ctx.lineTo(-s * .45, s * .1); ctx.lineTo(s * .1, s * .1);
+      ctx.lineTo(-s * .3, s); ctx.lineTo(s * .45, -s * .1); ctx.lineTo(-s * .1, -s * .1); ctx.closePath(); ctx.fill();
+    } else if (kind === 'freeze') {
+      for (let k = 0; k < 3; k++) { const a2 = k * Math.PI / 3; ctx.moveTo(Math.cos(a2) * s, Math.sin(a2) * s);
+        ctx.lineTo(-Math.cos(a2) * s, -Math.sin(a2) * s); }
+      ctx.stroke();
+    } else {
+      ctx.arc(0, -s * .1, s * .6, Math.PI, 0); ctx.moveTo(-s * .6, -s * .1); ctx.lineTo(-s * .6, s * .8);
+      ctx.moveTo(s * .6, -s * .1); ctx.lineTo(s * .6, s * .8); ctx.stroke();
+    }
+    ctx.restore();
   }
   function burst(x, y, n, color, spd) {
     for (let i = 0; i < n; i++) {
@@ -197,7 +253,7 @@
       if (d > 8) { ax = dx / d * Math.min(1, d / 80); ay = dy / d * Math.min(1, d / 80); }
     }
     const al = Math.hypot(ax, ay); if (al > 1) { ax /= al; ay /= al; }
-    const ACC = 1500, FRICTION = 6;
+    const ACC = active.swift > 0 ? 2500 : 1500, FRICTION = 6;
     player.vx += ax * ACC * dt; player.vy += ay * ACC * dt;
     player.vx -= player.vx * FRICTION * dt; player.vy -= player.vy * FRICTION * dt;
     player.x = Math.max(12, Math.min(W - 12, player.x + player.vx * dt));
@@ -208,10 +264,38 @@
     player.hurt = Math.max(0, player.hurt - dt);
     player.flareCd = Math.max(0, player.flareCd - dt);
     shake = Math.max(0, shake - dt * 30);
+    for (const k of POWER_KEYS) {
+      if (active[k] > 0 && active[k] - dt <= 0) SFX.expire();
+      active[k] = Math.max(0, active[k] - dt);
+    }
+    if (active.swift > 0 && Math.hypot(player.vx, player.vy) > 120 && Math.random() < .6)
+      particles.push({ x: player.x + rand(-5, 5), y: player.y + rand(-5, 5), vx: 0, vy: 0, life: .35, max: .35, color: POWERS.swift.color });
+
+    // power-ups
+    puT -= dt;
+    if (puT <= 0) { if (powerups.length < 2) spawnPowerup(); puT = rand(9, 14); }
+    for (let i = powerups.length - 1; i >= 0; i--) {
+      const pu = powerups[i]; pu.life -= dt; pu.t += dt;
+      if (Math.hypot(pu.x - player.x, pu.y - player.y) < 26) {
+        const def = POWERS[pu.kind];
+        active[pu.kind] = def.dur;
+        burst(pu.x, pu.y, 26, def.color, 200); SFX.power(pu.kind);
+        popups.push({ x: pu.x, y: pu.y - 20, text: def.name, color: def.color, life: 1.1 });
+        powerups.splice(i, 1);
+      } else if (pu.life <= 0) {
+        burst(pu.x, pu.y, 10, POWERS[pu.kind].color, 60); powerups.splice(i, 1);
+      }
+    }
+    for (let i = popups.length - 1; i >= 0; i--) { popups[i].life -= dt; popups[i].y -= 28 * dt;
+      if (popups[i].life <= 0) popups.splice(i, 1); }
 
     // embers
     for (let i = embers.length - 1; i >= 0; i--) {
       const e = embers[i]; e.t += dt * 3;
+      if (active.magnet > 0) {
+        const dx = player.x - e.x, dy = player.y - e.y, d = Math.hypot(dx, dy) || 1;
+        if (d < 320) { const pull = 260 + (320 - d) * 1.2; e.x += dx / d * pull * dt; e.y += dy / d * pull * dt; }
+      }
       if (Math.hypot(e.x - player.x, e.y - player.y) < 22) {
         embers.splice(i, 1); score++; player.light = Math.min(MAX_LIGHT, player.light + 14);
         burst(e.x, e.y, 14, '255,180,80', 140); spawnEmber(); SFX.ember(score);
@@ -224,13 +308,22 @@
     if (spawnT <= 0) { spawnWraith(); spawnT = Math.max(.45, 2.2 - time * 0.025); }
     const R = radius();
     for (let i = wraiths.length - 1; i >= 0; i--) {
-      const w = wraiths[i]; w.wob += dt * 4;
+      const w = wraiths[i];
       const dx = player.x - w.x, dy = player.y - w.y, d = Math.hypot(dx, dy) || 1;
-      // wraiths slow down inside bright light
-      const slow = d < R * .55 ? .55 : 1;
-      w.x += (dx / d * w.speed * slow + Math.cos(w.wob) * 30) * dt;
-      w.y += (dy / d * w.speed * slow + Math.sin(w.wob * 1.3) * 30) * dt;
-      if (d < w.r + 10 && player.hurt <= 0) {
+      // wraiths slow down inside bright light, and stop entirely during Stillness
+      const frozen = active.freeze > 0;
+      w.wob += dt * (frozen ? .4 : 4);
+      const slow = frozen ? 0 : d < R * .55 ? .55 : 1;
+      const drift = frozen ? 0 : 30;
+      w.x += (dx / d * w.speed * slow + Math.cos(w.wob) * drift) * dt;
+      w.y += (dy / d * w.speed * slow + Math.sin(w.wob * 1.3) * drift) * dt;
+      if (d < w.r + 10 && player.hurt <= 0 && active.ward > 0) {
+        // the ward absorbs the hit and destroys the wraith
+        active.ward = 0; player.hurt = .4; shake = 6;
+        burst(w.x, w.y, 30, POWERS.ward.color, 260); SFX.wardBreak();
+        score++; $('score').textContent = score;
+        wraiths.splice(i, 1);
+      } else if (d < w.r + 10 && player.hurt <= 0) {
         player.light -= 22; player.hurt = .8; shake = 12;
         burst(player.x, player.y, 24, '140,110,220', 220); SFX.hurt();
         wraiths.splice(i, 1);
@@ -278,12 +371,24 @@
       ctx.fillStyle = `rgba(255,240,200,${vis})`; ctx.beginPath(); ctx.arc(e.x, e.y, s * .55, 0, 6.28); ctx.fill();
     }
 
+    // power-ups: always visible, blink in their last 2 seconds
+    for (const pu of powerups) {
+      if (pu.life < 2 && Math.floor(pu.life * 8) % 2) continue;
+      const c = POWERS[pu.kind].color, bob = Math.sin(pu.t * 3) * 3, s = 13;
+      const pg = ctx.createRadialGradient(pu.x, pu.y + bob, 0, pu.x, pu.y + bob, 38);
+      pg.addColorStop(0, `rgba(${c},.45)`); pg.addColorStop(1, `rgba(${c},0)`);
+      ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(pu.x, pu.y + bob, 38, 0, 6.28); ctx.fill();
+      ctx.save(); ctx.translate(pu.x, pu.y + bob); ctx.rotate(Math.PI / 4 + Math.sin(pu.t * 2) * .15);
+      ctx.fillStyle = `rgba(${c},.95)`; ctx.fillRect(-s, -s, s * 2, s * 2); ctx.restore();
+      drawGlyph(pu.kind, pu.x, pu.y + bob, 7, .85);
+    }
+
     // wraiths, only visible inside the light, plus glinting eyes just beyond it
     for (const w of wraiths) {
       const d = Math.hypot(w.x - player.x, w.y - player.y);
       const vis = Math.max(0, Math.min(1, (R * 1.05 - d) / (R * .4)));
       if (vis > 0) {
-        ctx.fillStyle = `rgba(60,40,110,${.75 * vis})`;
+        ctx.fillStyle = active.freeze > 0 ? `rgba(150,190,230,${.7 * vis})` : `rgba(60,40,110,${.75 * vis})`;
         ctx.beginPath();
         ctx.ellipse(w.x, w.y, w.r, w.r * 1.2 + Math.sin(w.wob) * 2, 0, Math.PI, 0);
         for (let k = 0; k <= 4; k++) {
@@ -310,6 +415,25 @@
       ctx.beginPath(); ctx.arc(player.x, player.y, flareRing.r, 0, 6.28); ctx.stroke();
     }
 
+    // ward bubble
+    if (active.ward > 0 && !(active.ward < 2 && Math.floor(active.ward * 8) % 2)) {
+      ctx.strokeStyle = `rgba(${POWERS.ward.color},.75)`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(player.x, player.y, 24 + Math.sin(time * 5) * 1.5, 0, 6.28); ctx.stroke();
+      ctx.fillStyle = `rgba(${POWERS.ward.color},.08)`; ctx.fill();
+    }
+    // lure range
+    if (active.magnet > 0) {
+      ctx.strokeStyle = `rgba(${POWERS.magnet.color},.18)`; ctx.lineWidth = 1; ctx.setLineDash([4, 8]);
+      ctx.beginPath(); ctx.arc(player.x, player.y, 320, time, time + 6.28); ctx.stroke(); ctx.setLineDash([]);
+    }
+    // stillness frost over the screen
+    if (active.freeze > 0) {
+      ctx.fillStyle = `rgba(180,220,255,${Math.min(.08, active.freeze * .04)})`; ctx.fillRect(0, 0, W, H);
+    }
+    // pick-up labels
+    ctx.textAlign = 'center'; ctx.font = '600 13px system-ui';
+    for (const pp of popups) { ctx.fillStyle = `rgba(${pp.color},${Math.min(1, pp.life)})`; ctx.fillText(pp.text, pp.x, pp.y); }
+
     // lantern
     const blink = player.hurt > 0 && Math.floor(player.hurt * 20) % 2;
     if (!blink) {
@@ -332,6 +456,17 @@
     if (player.light >= 18 && player.flareCd <= 0) {
       ctx.fillStyle = 'rgba(244,230,200,.55)'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
       ctx.fillText('FLARE READY', W / 2, my - 6);
+    }
+    // active power-up timers, stacked above the meter
+    let row = 0;
+    for (const k of POWER_KEYS) {
+      if (active[k] <= 0) continue;
+      const def = POWERS[k], by = my - 26 - row * 16, bw = 90, bx = W / 2 - bw / 2 + 34;
+      ctx.fillStyle = `rgba(${def.color},.9)`; ctx.font = '600 10px system-ui'; ctx.textAlign = 'right';
+      ctx.fillText(def.name, bx - 8, by + 4);
+      ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fillRect(bx, by, bw, 4);
+      ctx.fillStyle = `rgba(${def.color},.9)`; ctx.fillRect(bx, by, bw * active[k] / def.dur, 4);
+      row++;
     }
   }
 
@@ -362,6 +497,9 @@
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
+
+  // hook for automated tests only (open the page with #test)
+  if (location.hash === '#test') window.__game = { spawnPowerup: k => powerups.push({ x: player.x + 60, y: player.y, kind: k, life: 9, t: 0 }), get active() { return active; } };
 
   // input
   startBtn.addEventListener('click', start);

@@ -10,3 +10,4 @@ Your lantern is slowly going out. Collect embers to keep its light burning. Wrai
 
 - **Move:** WASD, arrow keys, mouse, or touch-drag
 - **Flare:** Space, click, or the on-screen FLARE button on mobile
+- **Mute:** M, or the Sound button at the top right

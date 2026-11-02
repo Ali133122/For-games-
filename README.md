@@ -20,3 +20,13 @@ Your lantern is slowly going out. Collect embers to keep its light burning. Wrai
 | ⚡ Swift (green) | Faster movement | 7s |
 | ❄ Stillness (white) | Freezes every wraith in place | 4.5s |
 | 🧲 Lure (pink) | Pulls nearby embers toward you | 9s |
+
+**Enemies** join over time. A banner introduces each one the first time it shows up:
+
+| Enemy | Appears after | Behavior | How to deal with it |
+|---|---|---|---|
+| Wraith | Start | Drifts toward you and slows down in bright light | Dodge or flare (+1) |
+| Ashmoths | ~18s | Fast, erratic swarms of three that drain only a little light | Flare the whole swarm at once |
+| Cinder Thief | ~28s | Harmless, but eats embers and runs from your lantern | Chase it down or flare it to win back +2 points and light per stolen ember |
+| Lurker | ~42s | Hides in the dark; its red eyes flash before it lunges | Sidestep the lunge or flare it (+2) |
+| Hollow | ~65s | Big and slow, takes two flares, hits hard and drains your light while near | Keep your distance, flare twice (+5) |

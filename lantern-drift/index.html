@@ -39,7 +39,8 @@
 <div id="overlay">
   <h1>LANTERN DRIFT</h1>
   <p id="msg">Your lantern is going out. Gather <strong>embers</strong> to keep it burning.
-    <strong>Wraiths</strong> creep in from the dark, and each touch drains your light.<br><br>
+    <strong>Wraiths</strong> creep in from the dark, and each touch drains your light.
+    Stranger creatures emerge the longer you last.<br><br>
     <strong>Move:</strong> WASD / arrow keys / mouse, or drag on touch screens<br>
     <strong>Flare:</strong> Space or click. Spend light to burn away nearby wraiths.<br>
     <strong>Sound:</strong> M to mute<br><br>
@@ -147,6 +148,12 @@
       noise(.25, { vol: .25, from: 4000, to: 800, type: 'bandpass' });
     },
     expire() { tone(600, .2, { type: 'sine', vol: .08, to: 300 }); },
+    newEnemy() { tone(98, 1.1, { type: 'sawtooth', vol: .1, to: 92, attack: .2 }); tone(147, 1.1, { type: 'sine', vol: .12, to: 138, attack: .2, delay: .25 }); },
+    steal() { tone(900, .15, { type: 'square', vol: .05, to: 400 }); },
+    catch() { [0, 4, 7, 11, 14].forEach((n, i) => tone(660 * 2 ** (n / 12), .25, { vol: .12, delay: i * .04 })); },
+    lurk() { tone(55, .6, { type: 'sawtooth', vol: .18, to: 110, attack: .3 }); },
+    dash() { noise(.35, { vol: .3, from: 400, to: 2500, type: 'bandpass' }); },
+    thud() { tone(70, .5, { vol: .5, to: 30 }); noise(.2, { vol: .2, from: 500, to: 100 }); },
     heart() { tone(70, .15, { vol: .35, to: 45 }); tone(65, .15, { vol: .25, to: 40, delay: .16 }); },
     over() { [12, 7, 3, 0].forEach((n, i) => tone(220 * 2 ** (n / 12), .7, { type: 'triangle', vol: .16, delay: i * .22 })); },
   };
@@ -171,7 +178,7 @@
     player = { x: W / 2, y: H / 2, vx: 0, vy: 0, light: MAX_LIGHT, hurt: 0, flareCd: 0 };
     embers = []; wraiths = []; particles = [];
     score = 0; time = 0; spawnT = 1.5; shake = 0;
-    powerups = []; popups = []; puT = 7; active = { ward: 0, swift: 0, freeze: 0, magnet: 0 };
+    powerups = []; popups = []; puT = 7; seenTypes = new Set(['wraith']); banner = null; active = { ward: 0, swift: 0, freeze: 0, magnet: 0 };
     for (let i = 0; i < 5; i++) spawnEmber();
     $('score').textContent = 0;
   }
@@ -181,12 +188,132 @@
   function spawnEmber() {
     embers.push({ x: rand(40, W - 40), y: rand(60, H - 40), t: rand(0, 6.28) });
   }
-  function spawnWraith() {
-    const side = Math.floor(Math.random() * 4), m = 40;
-    const x = side === 0 ? -m : side === 1 ? W + m : rand(0, W);
-    const y = side === 2 ? -m : side === 3 ? H + m : rand(0, H);
-    const speed = rand(38, 58) + Math.min(time * 1.2, 70);
-    wraiths.push({ x, y, speed, wob: rand(0, 6.28), r: rand(13, 19) });
+  // ---------- Enemies ----------
+  // wraith: steady chaser. moth: fast erratic swarmer. thief: steals embers and runs; catch it for a reward.
+  // lurker: hides still, then lunges. hollow: big, slow, takes two flares, drains light while near.
+  const ENEMIES = {
+    wraith: { name: 'WRAITH',        hint: '',                                          from: 0,  weight: 10,  max: 99, color: '170,140,255', eye: '190,170,255' },
+    moth:   { name: 'ASHMOTHS',      hint: 'Quick, erratic swarms. Weak but hard to dodge.', from: 18, weight: 3.5, max: 12, color: '220,210,190', eye: '255,240,210' },
+    thief:  { name: 'CINDER THIEF',  hint: 'Steals embers and flees. Catch it to win them back!', from: 28, weight: 2,   max: 2,  color: '255,120,60',  eye: '255,220,90' },
+    lurker: { name: 'LURKER',        hint: 'Waits unseen in the dark, then lunges. Watch for red eyes.', from: 42, weight: 2.2, max: 3, color: '255,70,70', eye: '255,60,60' },
+    hollow: { name: 'HOLLOW',        hint: 'Takes two flares. Your light drains faster near it.', from: 65, weight: 1.1, max: 2, color: '120,90,160', eye: '230,220,255' },
+  };
+  let seenTypes = new Set(), banner = null;
+  const countType = t => wraiths.reduce((n, w) => n + (w.type === t), 0);
+  function edgePoint(m = 40) {
+    const side = Math.floor(Math.random() * 4);
+    return { x: side === 0 ? -m : side === 1 ? W + m : rand(0, W), y: side === 2 ? -m : side === 3 ? H + m : rand(0, H) };
+  }
+  function pickType() {
+    const opts = Object.entries(ENEMIES).filter(([t, e]) => time >= e.from && countType(t) < e.max);
+    let total = opts.reduce((n, [, e]) => n + e.weight, 0), r = Math.random() * total;
+    for (const [t, e] of opts) { if ((r -= e.weight) <= 0) return t; }
+    return 'wraith';
+  }
+  function spawnEnemy(type = pickType(), at = null) {
+    const ramp = Math.min(time * 1.2, 70);
+    const base = { type, wob: rand(0, 6.28), hp: 1, kx: 0, ky: 0, flash: 0 };
+    if (!seenTypes.has(type)) {
+      seenTypes.add(type);
+      if (ENEMIES[type].hint) { banner = { title: ENEMIES[type].name, hint: ENEMIES[type].hint, color: ENEMIES[type].color, life: 4 }; SFX.newEnemy(); }
+    }
+    if (type === 'moth') {
+      const p = at || edgePoint();
+      for (let k = 0; k < 3; k++)
+        wraiths.push({ ...base, wob: rand(0, 6.28), x: p.x + rand(-25, 25), y: p.y + rand(-25, 25), r: 7, speed: rand(95, 120) + ramp * .5, dmg: 8, reward: 1 });
+      return;
+    }
+    if (type === 'lurker') {
+      let p = at, tries = 0;
+      if (!p) do { p = { x: rand(40, W - 40), y: rand(60, H - 40) }; } while (Math.hypot(p.x - player.x, p.y - player.y) < 280 && ++tries < 20);
+      wraiths.push({ ...base, ...p, r: 15, speed: 0, dmg: 25, reward: 2, mode: 'hide', t: 0, cd: 1.5, dirx: 0, diry: 0 });
+      return;
+    }
+    const p = at || edgePoint();
+    if (type === 'thief') wraiths.push({ ...base, ...p, r: 12, speed: 100, dmg: 0, reward: 1, stash: 0 });
+    else if (type === 'hollow') wraiths.push({ ...base, ...p, r: 32, speed: 24 + ramp * .2, dmg: 38, reward: 5, hp: 2 });
+    else wraiths.push({ ...base, ...p, r: rand(13, 19), speed: rand(38, 58) + ramp, dmg: 22, reward: 1 });
+  }
+  function killEnemy(w, viaWard = false) {
+    const def = ENEMIES[w.type];
+    burst(w.x, w.y, w.type === 'hollow' ? 50 : 18, def.color, w.type === 'hollow' ? 260 : 160);
+    let pts = w.reward;
+    if (w.type === 'thief' && w.stash) {
+      pts += w.stash * 2; player.light = Math.min(MAX_LIGHT, player.light + w.stash * 10);
+      popups.push({ x: w.x, y: w.y - 18, text: `+${pts} RECOVERED`, color: def.color, life: 1.3 });
+    } else if (pts > 1) popups.push({ x: w.x, y: w.y - 18, text: `+${pts}`, color: def.color, life: 1.1 });
+    score += pts; $('score').textContent = score;
+  }
+  // returns true if the enemy dies
+  function hitEnemy(w, fromX, fromY) {
+    if (--w.hp <= 0) return true;
+    const dx = w.x - fromX, dy = w.y - fromY, d = Math.hypot(dx, dy) || 1;
+    w.kx = dx / d * 520; w.ky = dy / d * 520; w.flash = .35;
+    burst(w.x, w.y, 20, ENEMIES[w.type].color, 200); SFX.thud();
+    return false;
+  }
+  function moveEnemy(w, dt, dx, dy, d, R) {
+    // knockback
+    w.x += w.kx * dt; w.y += w.ky * dt; w.kx *= Math.pow(.02, dt); w.ky *= Math.pow(.02, dt);
+    const ux = dx / d, uy = dy / d;
+    switch (w.type) {
+      case 'wraith': {
+        const slow = d < R * .55 ? .55 : 1; // wraiths slow down inside bright light
+        w.x += (ux * w.speed * slow + Math.cos(w.wob) * 30) * dt;
+        w.y += (uy * w.speed * slow + Math.sin(w.wob * 1.3) * 30) * dt;
+        break;
+      }
+      case 'moth': {
+        w.wob += dt * 5;
+        w.x += (ux * w.speed + Math.cos(w.wob * 1.7) * 120) * dt;
+        w.y += (uy * w.speed + Math.sin(w.wob * 2.3) * 120) * dt;
+        break;
+      }
+      case 'thief': {
+        let tx, ty, spd;
+        if (d < 170) { tx = -ux; ty = -uy; spd = 160; }   // flee the lantern
+        else {
+          let best = null, bd = 1e9;
+          for (const e of embers) { const ed = Math.hypot(e.x - w.x, e.y - w.y); if (ed < bd) { bd = ed; best = e; } }
+          if (best) {
+            const ex = best.x - w.x, ey = best.y - w.y; tx = ex / (bd || 1); ty = ey / (bd || 1); spd = w.speed;
+            if (bd < 14) {
+              embers.splice(embers.indexOf(best), 1); spawnEmber(); w.stash++;
+              burst(best.x, best.y, 10, '255,120,60', 90); SFX.steal(); spd = 0;
+            }
+          } else { tx = Math.cos(w.wob); ty = Math.sin(w.wob); spd = 40; }
+        }
+        w.x += (tx * spd + Math.cos(w.wob) * 20) * dt; w.y += (ty * spd + Math.sin(w.wob) * 20) * dt;
+        // when cornered, slide along the walls instead of sticking
+        if (w.x > 20 && w.x < W - 20 && w.y > 20 && w.y < H - 20) w.entered = true;
+        if (w.entered) { w.x = Math.max(16, Math.min(W - 16, w.x)); w.y = Math.max(16, Math.min(H - 16, w.y)); }
+        else { w.x += ux * 60 * dt; w.y += uy * 60 * dt; }
+        break;
+      }
+      case 'lurker': {
+        w.t -= dt; w.cd -= dt;
+        if (w.mode === 'hide') {
+          if (d < Math.max(150, R * .95) && w.cd <= 0) { w.mode = 'wind'; w.t = .6; SFX.lurk(); }
+        } else if (w.mode === 'wind') {
+          w.dirx = ux; w.diry = uy; // keeps aiming until it lunges
+          if (w.t <= 0) { w.mode = 'dash'; w.t = .42; SFX.dash(); }
+        } else if (w.mode === 'dash') {
+          w.x += w.dirx * 600 * dt; w.y += w.diry * 600 * dt;
+          if (Math.random() < .8) particles.push({ x: w.x, y: w.y, vx: 0, vy: 0, life: .3, max: .3, color: '255,70,70' });
+          if (w.t <= 0) { w.mode = 'rest'; w.t = 1.3; }
+        } else if (w.mode === 'rest') {
+          w.x += ux * 20 * dt; w.y += uy * 20 * dt;
+          if (w.t <= 0) { w.mode = 'hide'; w.cd = 1.2; }
+        }
+        w.x = Math.max(14, Math.min(W - 14, w.x)); w.y = Math.max(14, Math.min(H - 14, w.y));
+        break;
+      }
+      case 'hollow': {
+        w.x += (ux * w.speed + Math.cos(w.wob * .5) * 12) * dt;
+        w.y += (uy * w.speed + Math.sin(w.wob * .5) * 12) * dt;
+        break;
+      }
+    }
   }
   function spawnPowerup() {
     // prefer a spot not right on top of the player
@@ -216,6 +343,94 @@
     }
     ctx.restore();
   }
+  function drawEnemy(w, R) {
+    const def = ENEMIES[w.type], fz = active.freeze > 0;
+    const d = Math.hypot(w.x - player.x, w.y - player.y);
+    const reach = w.type === 'moth' ? 1.3 : w.type === 'hollow' ? 1.25 : w.type === 'lurker' ? .75 : 1.05;
+    let vis = Math.max(0, Math.min(1, (R * reach - d) / (R * .4)));
+    if (w.type === 'lurker' && w.mode !== 'hide') vis = Math.max(vis, .85);
+    const body = fz ? '150,190,230' : null;
+    ctx.save();
+    if (w.flash > 0) vis = 1;
+    if (w.type === 'wraith' && vis > 0) {
+      ctx.fillStyle = `rgba(${body || '60,40,110'},${.75 * vis})`;
+      ctx.beginPath();
+      ctx.ellipse(w.x, w.y, w.r, w.r * 1.2 + Math.sin(w.wob) * 2, 0, Math.PI, 0);
+      for (let k = 0; k <= 4; k++) ctx.lineTo(w.x + w.r - (k / 4) * w.r * 2, w.y + w.r * 1.1 + (k % 2 ? -5 : 4) + Math.sin(w.wob + k) * 3);
+      ctx.closePath(); ctx.fill();
+    } else if (w.type === 'moth' && vis > 0) {
+      const flap = .35 + Math.abs(Math.sin(w.wob * 6)) * .75;
+      ctx.fillStyle = `rgba(${body || '190,180,160'},${.7 * vis})`;
+      ctx.beginPath(); ctx.ellipse(w.x - 6 * flap, w.y, 7 * flap, 5, -.4, 0, 6.28);
+      ctx.ellipse(w.x + 6 * flap, w.y, 7 * flap, 5, .4, 0, 6.28); ctx.fill();
+      ctx.fillStyle = `rgba(70,60,50,${vis})`; ctx.fillRect(w.x - 1.2, w.y - 5, 2.4, 10);
+    } else if (w.type === 'thief') {
+      const glowA = w.stash ? Math.min(.9, .35 + w.stash * .15) : 0;
+      if (glowA) { // its stolen embers give it away even in the dark
+        const tg = ctx.createRadialGradient(w.x, w.y + 3, 0, w.x, w.y + 3, 22 + w.stash * 3);
+        tg.addColorStop(0, `rgba(255,140,60,${glowA})`); tg.addColorStop(1, 'rgba(255,90,30,0)');
+        ctx.fillStyle = tg; ctx.beginPath(); ctx.arc(w.x, w.y + 3, 22 + w.stash * 3, 0, 6.28); ctx.fill();
+        vis = Math.max(vis, .6);
+      }
+      if (vis > 0) {
+        ctx.fillStyle = `rgba(${body || '70,25,20'},${.85 * vis})`;
+        ctx.beginPath(); ctx.ellipse(w.x, w.y, w.r, w.r * .8, 0, 0, 6.28); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(w.x - w.r * .7, w.y - w.r * .4); ctx.lineTo(w.x - w.r * .9, w.y - w.r * 1.3);
+        ctx.lineTo(w.x - w.r * .2, w.y - w.r * .7); ctx.moveTo(w.x + w.r * .7, w.y - w.r * .4);
+        ctx.lineTo(w.x + w.r * .9, w.y - w.r * 1.3); ctx.lineTo(w.x + w.r * .2, w.y - w.r * .7); ctx.fill();
+        for (let k = 0; k < w.stash && k < 6; k++) {
+          ctx.fillStyle = `rgba(255,200,100,${vis})`;
+          ctx.beginPath(); ctx.arc(w.x - 5 + (k % 3) * 5, w.y + 3 + Math.floor(k / 3) * 4, 1.6, 0, 6.28); ctx.fill();
+        }
+      }
+    } else if (w.type === 'lurker' && vis > 0) {
+      const jit = w.mode === 'wind' ? rand(-2, 2) : 0;
+      ctx.fillStyle = `rgba(${body || '80,18,24'},${.9 * vis})`;
+      ctx.beginPath();
+      for (let k = 0; k < 10; k++) {
+        const a = k / 10 * 6.28 + w.wob * .1, rr = k % 2 ? w.r * .55 : w.r * (w.mode === 'dash' ? 1.4 : 1.1);
+        ctx.lineTo(w.x + jit + Math.cos(a) * rr, w.y + Math.sin(a) * rr);
+      }
+      ctx.closePath(); ctx.fill();
+    } else if (w.type === 'hollow' && vis > 0) {
+      const hg = ctx.createRadialGradient(w.x, w.y, w.r * .3, w.x, w.y, w.r * 2);
+      hg.addColorStop(0, `rgba(0,0,0,${.85 * vis})`); hg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(w.x, w.y, w.r * 2, 0, 6.28); ctx.fill();
+      ctx.fillStyle = w.flash > 0 ? `rgba(255,240,255,${w.flash * 2})` : `rgba(${body || '40,25,60'},${.95 * vis})`;
+      ctx.beginPath();
+      for (let k = 0; k < 16; k++) {
+        const a = k / 16 * 6.28, rr = w.r * (1 + Math.sin(w.wob * .7 + k * 1.9) * .08);
+        ctx.lineTo(w.x + Math.cos(a) * rr, w.y + Math.sin(a) * rr);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = `rgba(${def.color},${.5 * vis})`; ctx.lineWidth = 2; ctx.stroke();
+      for (let k = 0; k < w.hp; k++) { // health pips
+        ctx.fillStyle = `rgba(${def.color},${vis})`;
+        ctx.beginPath(); ctx.arc(w.x - 5 + k * 10, w.y + w.r + 8, 2.5, 0, 6.28); ctx.fill();
+      }
+    }
+    // eyes
+    let eyeA = Math.max(vis, d < R * 2 ? .35 : 0);
+    if (w.type === 'lurker') eyeA = w.mode === 'hide' ? (d < R * 1.1 ? .25 * (.5 + .5 * Math.sin(time * 2 + w.wob)) : 0) : 1;
+    if (w.type === 'moth') eyeA = 0;
+    if (eyeA > 0) {
+      const er = w.type === 'hollow' ? 4.5 : w.type === 'lurker' && w.mode === 'wind' ? 3.5 : 2.2;
+      const ey = w.type === 'hollow' ? w.y - 6 : w.y - 2;
+      if (w.type === 'lurker' && w.mode === 'wind') {
+        const rg = ctx.createRadialGradient(w.x, ey, 0, w.x, ey, 26);
+        rg.addColorStop(0, 'rgba(255,40,40,.5)'); rg.addColorStop(1, 'rgba(255,40,40,0)');
+        ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(w.x, ey, 26, 0, 6.28); ctx.fill();
+      }
+      ctx.fillStyle = `rgba(${def.eye},${eyeA})`;
+      if (w.type === 'hollow') {
+        ctx.strokeStyle = `rgba(${def.eye},${eyeA})`; ctx.lineWidth = 2; ctx.beginPath();
+        ctx.arc(w.x - w.r * .35, ey, er, 0, 6.28); ctx.moveTo(w.x + w.r * .35 + er, ey); ctx.arc(w.x + w.r * .35, ey, er, 0, 6.28); ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.arc(w.x - w.r * .35, ey, er, 0, 6.28); ctx.arc(w.x + w.r * .35, ey, er, 0, 6.28); ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
   function burst(x, y, n, color, spd) {
     for (let i = 0; i < n; i++) {
       const a = rand(0, 6.28), s = rand(spd * .3, spd);
@@ -230,12 +445,12 @@
     SFX.flare();
     let killed = 0;
     wraiths = wraiths.filter(w => {
-      if (Math.hypot(w.x - player.x, w.y - player.y) < R) {
-        burst(w.x, w.y, 18, '170,140,255', 160); score += 1; SFX.banish(killed++); return false;
+      if (Math.hypot(w.x - player.x, w.y - player.y) < R + w.r) {
+        if (!hitEnemy(w, player.x, player.y)) return true;
+        killEnemy(w); SFX.banish(killed++); return false;
       }
       return true;
     });
-    $('score').textContent = score;
     flareRing = { r: 0, max: R, life: .35 };
   }
   let flareRing = null;
@@ -303,30 +518,34 @@
       }
     }
 
-    // wraiths
+    // enemies
     spawnT -= dt;
-    if (spawnT <= 0) { spawnWraith(); spawnT = Math.max(.45, 2.2 - time * 0.025); }
+    if (spawnT <= 0) { spawnEnemy(); spawnT = Math.max(.5, 2.2 - time * 0.025); }
+    if (banner) { banner.life -= dt; if (banner.life <= 0) banner = null; }
     const R = radius();
+    const frozen = active.freeze > 0;
     for (let i = wraiths.length - 1; i >= 0; i--) {
       const w = wraiths[i];
       const dx = player.x - w.x, dy = player.y - w.y, d = Math.hypot(dx, dy) || 1;
-      // wraiths slow down inside bright light, and stop entirely during Stillness
-      const frozen = active.freeze > 0;
       w.wob += dt * (frozen ? .4 : 4);
-      const slow = frozen ? 0 : d < R * .55 ? .55 : 1;
-      const drift = frozen ? 0 : 30;
-      w.x += (dx / d * w.speed * slow + Math.cos(w.wob) * drift) * dt;
-      w.y += (dy / d * w.speed * slow + Math.sin(w.wob * 1.3) * drift) * dt;
-      if (d < w.r + 10 && player.hurt <= 0 && active.ward > 0) {
-        // the ward absorbs the hit and destroys the wraith
+      w.flash = Math.max(0, w.flash - dt);
+      if (!frozen) moveEnemy(w, dt, dx, dy, d, R);
+      // a hollow nearby smothers your light
+      if (w.type === 'hollow' && d < 230) player.light -= 3 * dt;
+      if (d >= w.r + 10) continue;
+      if (w.type === 'thief') {
+        // thieves don't hurt you; catching one returns what it stole
+        killEnemy(w); SFX.catch(); wraiths.splice(i, 1);
+      } else if (player.hurt <= 0 && active.ward > 0) {
+        // the ward absorbs the hit
         active.ward = 0; player.hurt = .4; shake = 6;
         burst(w.x, w.y, 30, POWERS.ward.color, 260); SFX.wardBreak();
-        score++; $('score').textContent = score;
-        wraiths.splice(i, 1);
-      } else if (d < w.r + 10 && player.hurt <= 0) {
-        player.light -= 22; player.hurt = .8; shake = 12;
-        burst(player.x, player.y, 24, '140,110,220', 220); SFX.hurt();
-        wraiths.splice(i, 1);
+        if (hitEnemy(w, player.x, player.y)) { killEnemy(w); wraiths.splice(i, 1); }
+      } else if (player.hurt <= 0) {
+        player.light -= w.dmg; player.hurt = .8; shake = w.dmg > 30 ? 18 : w.dmg > 10 ? 12 : 5;
+        burst(player.x, player.y, 24, ENEMIES[w.type].color, 220); SFX.hurt();
+        if (w.type === 'hollow') { const k = 380; player.vx -= dx / d * -k; player.vy -= dy / d * -k; w.kx = -dx / d * 300; w.ky = -dy / d * 300; }
+        else wraiths.splice(i, 1);
       }
     }
 
@@ -383,27 +602,8 @@
       drawGlyph(pu.kind, pu.x, pu.y + bob, 7, .85);
     }
 
-    // wraiths, only visible inside the light, plus glinting eyes just beyond it
-    for (const w of wraiths) {
-      const d = Math.hypot(w.x - player.x, w.y - player.y);
-      const vis = Math.max(0, Math.min(1, (R * 1.05 - d) / (R * .4)));
-      if (vis > 0) {
-        ctx.fillStyle = active.freeze > 0 ? `rgba(150,190,230,${.7 * vis})` : `rgba(60,40,110,${.75 * vis})`;
-        ctx.beginPath();
-        ctx.ellipse(w.x, w.y, w.r, w.r * 1.2 + Math.sin(w.wob) * 2, 0, Math.PI, 0);
-        for (let k = 0; k <= 4; k++) {
-          const tx = w.x + w.r - (k / 4) * w.r * 2;
-          ctx.lineTo(tx, w.y + w.r * 1.1 + (k % 2 ? -5 : 4) + Math.sin(w.wob + k) * 3);
-        }
-        ctx.closePath(); ctx.fill();
-      }
-      const eyeA = Math.max(vis, d < R * 2 ? .35 : 0);
-      if (eyeA > 0) {
-        ctx.fillStyle = `rgba(190,170,255,${eyeA})`;
-        ctx.beginPath(); ctx.arc(w.x - w.r * .35, w.y - 2, 2.2, 0, 6.28);
-        ctx.arc(w.x + w.r * .35, w.y - 2, 2.2, 0, 6.28); ctx.fill();
-      }
-    }
+    // enemies: mostly visible only inside the light, with eyes glinting just beyond it
+    for (const w of wraiths) drawEnemy(w, R);
 
     // particles
     for (const p of particles) {
@@ -457,6 +657,14 @@
       ctx.fillStyle = 'rgba(244,230,200,.55)'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
       ctx.fillText('FLARE READY', W / 2, my - 6);
     }
+    if (banner) {
+      const a = Math.min(1, banner.life, (4 - banner.life) * 3);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = `rgba(${banner.color},${a})`; ctx.font = '600 18px system-ui';
+      ctx.fillText('NEW: ' + banner.title, W / 2, 64);
+      ctx.fillStyle = `rgba(244,230,200,${a * .8})`; ctx.font = '13px system-ui';
+      ctx.fillText(banner.hint, W / 2, 84);
+    }
     // active power-up timers, stacked above the meter
     let row = 0;
     for (const k of POWER_KEYS) {
@@ -499,7 +707,8 @@
   requestAnimationFrame(loop);
 
   // hook for automated tests only (open the page with #test)
-  if (location.hash === '#test') window.__game = { spawnPowerup: k => powerups.push({ x: player.x + 60, y: player.y, kind: k, life: 9, t: 0 }), get active() { return active; } };
+  if (location.hash === '#test') window.__game = { spawnPowerup: k => powerups.push({ x: player.x + 60, y: player.y, kind: k, life: 9, t: 0 }), get active() { return active; },
+    spawnEnemy: (t, x, y) => spawnEnemy(t, x != null ? { x, y } : null), get enemies() { return wraiths; }, setTime: t => { time = t; }, get player() { return player; } };
 
   // input
   startBtn.addEventListener('click', start);

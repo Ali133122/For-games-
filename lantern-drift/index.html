@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Lantern Drift</title>
+<style>
+  :root { --bg: #07060b; --ink: #f4e6c8; --dim: #8a7f6c; --accent: #ffb347; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+    font-family: ui-rounded, "Segoe UI", system-ui, sans-serif; touch-action: none; user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; top: 12px; left: 16px; right: 16px; display: flex; justify-content: space-between;
+    font-size: 15px; letter-spacing: .04em; pointer-events: none; text-shadow: 0 0 8px #000; }
+  #hud b { color: var(--accent); font-weight: 600; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; text-align: center; gap: 14px; padding: 16px; background: rgba(7,6,11,.72); }
+  #overlay h1 { font-size: clamp(36px, 9vw, 72px); font-weight: 300; letter-spacing: .12em; color: var(--accent);
+    text-shadow: 0 0 24px rgba(255,179,71,.6); }
+  #overlay p { max-width: 460px; color: var(--dim); line-height: 1.55; font-size: 15px; }
+  #overlay p strong { color: var(--ink); font-weight: 500; }
+  #overlay button { margin-top: 8px; padding: 12px 32px; font: inherit; font-size: 17px; letter-spacing: .1em;
+    color: var(--bg); background: var(--accent); border: 0; border-radius: 999px; cursor: pointer;
+    box-shadow: 0 0 24px rgba(255,179,71,.45); }
+  #overlay button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+  #flareBtn { position: fixed; right: 20px; bottom: 24px; width: 76px; height: 76px; border-radius: 50%;
+    border: 2px solid var(--accent); background: rgba(255,179,71,.12); color: var(--accent); font: inherit;
+    font-size: 13px; letter-spacing: .1em; display: none; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"><span>Embers <b id="score">0</b></span><span>Best <b id="best">0</b></span></div>
+<button id="flareBtn" aria-label="Flare">FLARE</button>
+<div id="overlay">
+  <h1>LANTERN DRIFT</h1>
+  <p id="msg">Your lantern is going out. Gather <strong>embers</strong> to keep it burning.
+    <strong>Wraiths</strong> creep in from the dark, and each touch drains your light.<br><br>
+    <strong>Move:</strong> WASD / arrow keys / mouse, or drag on touch screens<br>
+    <strong>Flare:</strong> Space or click. Spend light to burn away nearby wraiths.</p>
+  <button id="start">BEGIN</button>
+</div>
+<script>
+(() => {
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const overlay = $('overlay'), msg = $('msg'), startBtn = $('start'), flareBtn = $('flareBtn');
+  let W, H, DPR;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  addEventListener('resize', resize); resize();
+
+  let best = 0;
+  try { best = +localStorage.getItem('lanternDriftBest') || 0; } catch (e) {}
+  $('best').textContent = best;
+
+  const MAX_LIGHT = 100;
+  let state = 'menu', player, embers, wraiths, particles, score, time, spawnT, shake;
+  const keys = {};
+  let pointer = null, touching = false;
+
+  function reset() {
+    player = { x: W / 2, y: H / 2, vx: 0, vy: 0, light: MAX_LIGHT, hurt: 0, flareCd: 0 };
+    embers = []; wraiths = []; particles = [];
+    score = 0; time = 0; spawnT = 1.5; shake = 0;
+    for (let i = 0; i < 5; i++) spawnEmber();
+    $('score').textContent = 0;
+  }
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const radius = () => 40 + player.light * 1.6;
+
+  function spawnEmber() {
+    embers.push({ x: rand(40, W - 40), y: rand(60, H - 40), t: rand(0, 6.28) });
+  }
+  function spawnWraith() {
+    const side = Math.floor(Math.random() * 4), m = 40;
+    const x = side === 0 ? -m : side === 1 ? W + m : rand(0, W);
+    const y = side === 2 ? -m : side === 3 ? H + m : rand(0, H);
+    const speed = rand(38, 58) + Math.min(time * 1.2, 70);
+    wraiths.push({ x, y, speed, wob: rand(0, 6.28), r: rand(13, 19) });
+  }
+  function burst(x, y, n, color, spd) {
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, 6.28), s = rand(spd * .3, spd);
+      particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(.4, .9), max: .9, color });
+    }
+  }
+  function flare() {
+    if (state !== 'play' || player.flareCd > 0 || player.light < 18) return;
+    player.light -= 15; player.flareCd = .6; shake = 8;
+    const R = radius() * 1.5;
+    burst(player.x, player.y, 60, '255,200,110', 420);
+    wraiths = wraiths.filter(w => {
+      if (Math.hypot(w.x - player.x, w.y - player.y) < R) {
+        burst(w.x, w.y, 18, '170,140,255', 160); score += 1; return false;
+      }
+      return true;
+    });
+    $('score').textContent = score;
+    flareRing = { r: 0, max: R, life: .35 };
+  }
+  let flareRing = null;
+
+  function update(dt) {
+    time += dt;
+    // input
+    let ax = 0, ay = 0;
+    if (keys.ArrowLeft || keys.KeyA) ax -= 1;
+    if (keys.ArrowRight || keys.KeyD) ax += 1;
+    if (keys.ArrowUp || keys.KeyW) ay -= 1;
+    if (keys.ArrowDown || keys.KeyS) ay += 1;
+    if (!ax && !ay && pointer) {
+      const dx = pointer.x - player.x, dy = pointer.y - player.y, d = Math.hypot(dx, dy);
+      if (d > 8) { ax = dx / d * Math.min(1, d / 80); ay = dy / d * Math.min(1, d / 80); }
+    }
+    const al = Math.hypot(ax, ay); if (al > 1) { ax /= al; ay /= al; }
+    const ACC = 1500, FRICTION = 6;
+    player.vx += ax * ACC * dt; player.vy += ay * ACC * dt;
+    player.vx -= player.vx * FRICTION * dt; player.vy -= player.vy * FRICTION * dt;
+    player.x = Math.max(12, Math.min(W - 12, player.x + player.vx * dt));
+    player.y = Math.max(12, Math.min(H - 12, player.y + player.vy * dt));
+
+    // light decays faster over time
+    player.light -= (3.2 + time * 0.035) * dt;
+    player.hurt = Math.max(0, player.hurt - dt);
+    player.flareCd = Math.max(0, player.flareCd - dt);
+    shake = Math.max(0, shake - dt * 30);
+
+    // embers
+    for (let i = embers.length - 1; i >= 0; i--) {
+      const e = embers[i]; e.t += dt * 3;
+      if (Math.hypot(e.x - player.x, e.y - player.y) < 22) {
+        embers.splice(i, 1); score++; player.light = Math.min(MAX_LIGHT, player.light + 14);
+        burst(e.x, e.y, 14, '255,180,80', 140); spawnEmber();
+        $('score').textContent = score;
+      }
+    }
+
+    // wraiths
+    spawnT -= dt;
+    if (spawnT <= 0) { spawnWraith(); spawnT = Math.max(.45, 2.2 - time * 0.025); }
+    const R = radius();
+    for (let i = wraiths.length - 1; i >= 0; i--) {
+      const w = wraiths[i]; w.wob += dt * 4;
+      const dx = player.x - w.x, dy = player.y - w.y, d = Math.hypot(dx, dy) || 1;
+      // wraiths slow down inside bright light
+      const slow = d < R * .55 ? .55 : 1;
+      w.x += (dx / d * w.speed * slow + Math.cos(w.wob) * 30) * dt;
+      w.y += (dy / d * w.speed * slow + Math.sin(w.wob * 1.3) * 30) * dt;
+      if (d < w.r + 10 && player.hurt <= 0) {
+        player.light -= 22; player.hurt = .8; shake = 12;
+        burst(player.x, player.y, 24, '140,110,220', 220);
+        wraiths.splice(i, 1);
+      }
+    }
+
+    // particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i]; p.life -= dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .94; p.vy *= .94;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    if (flareRing) { flareRing.life -= dt; flareRing.r += (flareRing.max - flareRing.r) * 14 * dt;
+      if (flareRing.life <= 0) flareRing = null; }
+
+    if (player.light <= 0) gameOver();
+  }
+
+  function draw() {
+    ctx.save();
+    if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+    ctx.fillStyle = '#07060b'; ctx.fillRect(-20, -20, W + 40, H + 40);
+    if (!player) { ctx.restore(); return; }
+    const R = radius(), flick = 1 + Math.sin(time * 17) * .015 + Math.sin(time * 7.3) * .02;
+
+    // warm ground glow
+    const g = ctx.createRadialGradient(player.x, player.y, 0, player.x, player.y, R * flick);
+    g.addColorStop(0, 'rgba(255,190,110,.42)'); g.addColorStop(.5, 'rgba(200,110,50,.16)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+    // embers (faintly visible everywhere so you can navigate)
+    for (const e of embers) {
+      const d = Math.hypot(e.x - player.x, e.y - player.y);
+      const vis = Math.max(.28, 1 - d / (R * 1.4));
+      const s = 5 + Math.sin(e.t) * 1.5;
+      const eg = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, s * 4);
+      eg.addColorStop(0, `rgba(255,200,100,${vis})`); eg.addColorStop(1, 'rgba(255,120,40,0)');
+      ctx.fillStyle = eg; ctx.beginPath(); ctx.arc(e.x, e.y, s * 4, 0, 6.28); ctx.fill();
+      ctx.fillStyle = `rgba(255,240,200,${vis})`; ctx.beginPath(); ctx.arc(e.x, e.y, s * .55, 0, 6.28); ctx.fill();
+    }
+
+    // wraiths, only visible inside the light, plus glinting eyes just beyond it
+    for (const w of wraiths) {
+      const d = Math.hypot(w.x - player.x, w.y - player.y);
+      const vis = Math.max(0, Math.min(1, (R * 1.05 - d) / (R * .4)));
+      if (vis > 0) {
+        ctx.fillStyle = `rgba(60,40,110,${.75 * vis})`;
+        ctx.beginPath();
+        ctx.ellipse(w.x, w.y, w.r, w.r * 1.2 + Math.sin(w.wob) * 2, 0, Math.PI, 0);
+        for (let k = 0; k <= 4; k++) {
+          const tx = w.x + w.r - (k / 4) * w.r * 2;
+          ctx.lineTo(tx, w.y + w.r * 1.1 + (k % 2 ? -5 : 4) + Math.sin(w.wob + k) * 3);
+        }
+        ctx.closePath(); ctx.fill();
+      }
+      const eyeA = Math.max(vis, d < R * 2 ? .35 : 0);
+      if (eyeA > 0) {
+        ctx.fillStyle = `rgba(190,170,255,${eyeA})`;
+        ctx.beginPath(); ctx.arc(w.x - w.r * .35, w.y - 2, 2.2, 0, 6.28);
+        ctx.arc(w.x + w.r * .35, w.y - 2, 2.2, 0, 6.28); ctx.fill();
+      }
+    }
+
+    // particles
+    for (const p of particles) {
+      ctx.fillStyle = `rgba(${p.color},${Math.max(0, p.life / p.max)})`;
+      ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+    }
+    if (flareRing) {
+      ctx.strokeStyle = `rgba(255,210,140,${flareRing.life / .35})`; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(player.x, player.y, flareRing.r, 0, 6.28); ctx.stroke();
+    }
+
+    // lantern
+    const blink = player.hurt > 0 && Math.floor(player.hurt * 20) % 2;
+    if (!blink) {
+      const lg = ctx.createRadialGradient(player.x, player.y, 0, player.x, player.y, 26);
+      lg.addColorStop(0, 'rgba(255,245,215,1)'); lg.addColorStop(.35, 'rgba(255,190,90,.8)');
+      lg.addColorStop(1, 'rgba(255,140,40,0)');
+      ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(player.x, player.y, 26, 0, 6.28); ctx.fill();
+      ctx.strokeStyle = 'rgba(80,55,30,.9)'; ctx.lineWidth = 2;
+      ctx.strokeRect(player.x - 7, player.y - 9, 14, 18);
+      ctx.beginPath(); ctx.arc(player.x, player.y - 12, 5, Math.PI, 0); ctx.stroke();
+    }
+    ctx.restore();
+
+    // light meter
+    const mw = Math.min(260, W - 32), mx = (W - mw) / 2, my = H - 22;
+    ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fillRect(mx, my, mw, 6);
+    const pct = Math.max(0, player.light) / MAX_LIGHT;
+    ctx.fillStyle = pct < .25 ? '#ff6b4a' : '#ffb347';
+    ctx.fillRect(mx, my, mw * pct, 6);
+    if (player.light >= 18 && player.flareCd <= 0) {
+      ctx.fillStyle = 'rgba(244,230,200,.55)'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('FLARE READY', W / 2, my - 6);
+    }
+  }
+
+  function gameOver() {
+    state = 'over';
+    const newBest = score > best;
+    if (newBest) { best = score; try { localStorage.setItem('lanternDriftBest', best); } catch (e) {} }
+    $('best').textContent = best;
+    overlay.querySelector('h1').textContent = 'THE LIGHT FADES';
+    msg.innerHTML = `You gathered <strong>${score}</strong> embers and lasted <strong>${time.toFixed(1)}s</strong>.` +
+      (newBest ? '<br><strong>New best!</strong>' : '');
+    startBtn.textContent = 'AGAIN';
+    overlay.classList.remove('hidden');
+    flareBtn.style.display = 'none';
+    startBtn.focus();
+  }
+  function start() {
+    reset(); state = 'play'; overlay.classList.add('hidden');
+    if (matchMedia('(pointer: coarse)').matches) flareBtn.style.display = 'block';
+  }
+
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(.033, (now - last) / 1000); last = now;
+    if (state === 'play') update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // input
+  startBtn.addEventListener('click', start);
+  addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'Space') { e.preventDefault(); if (state === 'play') flare(); }
+    if (e.code === 'Enter' && state !== 'play') start();
+    if (e.code.startsWith('Arrow')) e.preventDefault();
+  });
+  addEventListener('keyup', e => { keys[e.code] = false; });
+  cv.addEventListener('mousemove', e => { pointer = { x: e.clientX, y: e.clientY }; });
+  cv.addEventListener('mouseleave', () => { pointer = null; });
+  cv.addEventListener('mousedown', e => { if (e.button === 0) flare(); });
+  const tp = t => ({ x: t.clientX, y: t.clientY - 50 }); // offset so finger doesn't hide the lantern
+  cv.addEventListener('touchstart', e => { e.preventDefault(); pointer = tp(e.touches[0]); }, { passive: false });
+  cv.addEventListener('touchmove', e => { e.preventDefault(); pointer = tp(e.touches[0]); }, { passive: false });
+  cv.addEventListener('touchend', e => { if (!e.touches.length) pointer = null; });
+  flareBtn.addEventListener('touchstart', e => { e.preventDefault(); flare(); }, { passive: false });
+  flareBtn.addEventListener('click', flare);
+})();
+</script>
+</body>
+</html>

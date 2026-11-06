@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sky Glider</title>
+<style>html, body { margin: 0; height: 100%; background: #f3a56b; overflow: hidden; }</style>
+</head>
+<body>
+<script src="../flint/flint.js"></script>
+<script src="../flint/flint3d.js"></script>
+<script>
+'use strict';
+// Sky Glider: fly through the rings to keep the clock running. Built with Flint3D.
+const { Game3D, Scene3D, Geometry, Texture, Material, Node, mesh, Collide3D } = Flint3D;
+const { text, store, rand, pick, chance, clamp, damp } = Flint;
+
+const game = new Game3D({ touchButtons: [] });
+game.input.bind('go', ['Space', 'Enter', 'PadA', 'Pointer']);
+const SEG = 30, SEGS = 8, XMAX = 7, YMIN = 1.2, YMAX = 9, RING_R = 1.7;
+
+const skyTex = Texture.canvas(512, 256, (g, w, h) => {
+  const sky = g.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, '#5b4a8a'); sky.addColorStop(0.55, '#e7836b'); sky.addColorStop(1, '#f9c27b');
+  g.fillStyle = sky; g.fillRect(0, 0, w, h);
+  g.fillStyle = 'rgba(255,240,200,.95)'; g.beginPath(); g.arc(w * 0.62, h * 0.72, 38, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(255,255,255,.35)';
+  for (let i = 0; i < 7; i++) { g.beginPath(); g.ellipse((i * 83) % w, 40 + (i * 37) % 90, 50 + (i % 3) * 20, 9, 0, 0, Math.PI * 2); g.fill(); }
+});
+const ringGeo = Geometry.merge(Array.from({ length: 18 }, (_, i) => {
+  const a = (i / 18) * Math.PI * 2;
+  return { geometry: Geometry.box(0.62, 0.22, 0.22), position: [Math.cos(a) * RING_R, Math.sin(a) * RING_R, 0], rotation: [0, 0, a + Math.PI / 2] };
+}));
+const planeGeo = Geometry.merge([
+  { geometry: Geometry.box(0.32, 0.26, 1.5), position: [0, 0, 0] },
+  { geometry: Geometry.cone(0.17, 0.4, 8), position: [0, 0, -0.95], rotation: [-Math.PI / 2, 0, 0] },
+  { geometry: Geometry.box(2.6, 0.06, 0.55), position: [0, 0.05, -0.05] },
+  { geometry: Geometry.box(0.9, 0.05, 0.3), position: [0, 0.05, 0.65] },
+  { geometry: Geometry.box(0.05, 0.4, 0.32), position: [0, 0.25, 0.65] },
+]);
+const trimGeo = Geometry.merge([{ geometry: Geometry.box(0.4, 0.07, 0.56), position: [-1.12, 0.06, -0.05] }, { geometry: Geometry.box(0.4, 0.07, 0.56), position: [1.12, 0.06, -0.05] }]);
+const M = {
+  plane: new Material({ color: '#f5f1ea' }), trim: new Material({ color: '#ff5a3d', emissive: '#401000' }),
+  ring: new Material({ color: '#ffd23f', emissive: '#ff9a1f', emissiveIntensity: 0.55 }), ringDone: new Material({ color: '#8dffa8', emissive: '#2aa060', emissiveIntensity: 0.6, opacity: 0.5 }),
+  rock: new Material({ color: '#b0694a' }), rock2: new Material({ color: '#8f5440' }), sand: new Material({ color: '#b97a55' }),
+  pillar: new Material({ color: '#6e3b55', emissive: '#2a0a1a' }), sky: new Material({ map: skyTex, unlit: true, fog: false }),
+};
+
+class Fly extends Scene3D {
+  enter() {
+    Object.assign(this.env, { background: '#f3a56b', fog: [40, 120], fogColor: '#f0a372', sky: '#d8a890', ground: '#6a3a4a', sunDir: [0.4, -0.8, -0.6], sunColor: '#ffe6c8', sunIntensity: 0.7 });
+    this.camera.fov = 66; this.camera.far = 180;
+    this.best = store.get('skyglider:best', 0);
+    this.sky = this.add(mesh(Geometry.quad(520, 240), M.sky, { position: [0, 50, -150] }));
+    this.segments = [];
+    for (let i = 0; i < SEGS; i++) this.segments.push(this.add(this.makeSegment(-i * SEG)));
+    this.plane = this.add(new Node());
+    this.plane.add(mesh(planeGeo, M.plane), mesh(trimGeo, M.trim));
+    this.reset();
+    this.state = 'title';
+  }
+  makeSegment(z) {
+    const g = new Node({ position: [0, 0, z] });
+    g.add(mesh(Geometry.plane(40, SEG), M.sand, { position: [0, 0, 0] }));
+    for (const side of [-1, 1]) for (let k = 0; k < 4; k++) {
+      const h = rand(9, 18), w = rand(3, 6);
+      g.add(mesh(Geometry.box(w, h, rand(6, 9)), k % 2 ? M.rock : M.rock2, { position: [side * (XMAX + 4 + w / 2 + rand(0, 2)), h / 2, -SEG / 2 + k * (SEG / 4) + rand(0, 3)] }));
+    }
+    return g;
+  }
+  reset() {
+    for (const t of this.things || []) t.node.destroy();
+    this.things = [];
+    Object.assign(this, { x: 0, y: 4, z: 0, vx: 0, vy: 0, speed: 20, timeLeft: 20, score: 0, rings: 0, combo: 0, nextZ: -40, msg: null });
+    this.plane.visible = true;
+    this.segments.forEach((s, i) => (s.position.z = -i * SEG));
+    this.spawnAhead();
+  }
+  spawnAhead() {
+    while (this.nextZ > this.z - 150) {
+      const z = this.nextZ, rx = rand(-XMAX + 1.5, XMAX - 1.5), ry = rand(YMIN + 1.5, YMAX - 1.2);
+      this.things.push({ kind: 'ring', node: this.add(mesh(ringGeo, M.ring, { position: [rx, ry, z] })), x: rx, y: ry, z, passed: false });
+      // obstacles show up once you're under way
+      const flown = -this.z;
+      if (flown > 150 && chance(Math.min(0.85, 0.3 + flown / 3000))) {
+        const oz = z + rand(10, 16);
+        if (chance(0.5)) {
+          let px = rand(-XMAX, XMAX); if (Math.abs(px - rx) < 2.6) px = rx + (px < rx ? -3 : 3);
+          this.things.push({ kind: 'block', node: this.add(mesh(Geometry.box(1.6, 12, 1.6), M.pillar, { position: [px, 6, oz] })), box: { x: px, y: 6, z: oz, w: 1.6, h: 12, d: 1.6 } });
+        } else {
+          let py = rand(YMIN + 0.5, YMAX - 0.5); if (Math.abs(py - ry) < 2.6) py = ry + (py < ry ? -3 : 3);
+          py = clamp(py, 0.6, 10);
+          this.things.push({ kind: 'block', node: this.add(mesh(Geometry.box(22, 1.2, 1.4), M.pillar, { position: [0, py, oz] })), box: { x: 0, y: py, z: oz, w: 22, h: 1.2, d: 1.4 } });
+        }
+      }
+      this.nextZ -= rand(26, 36) * clamp(this.speed / 24, 1, 1.6);
+    }
+  }
+  update(dt) {
+    const input = this.input;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.msg) { this.msg.t -= dt; if (this.msg.t <= 0) this.msg = null; }
+    if (this.state !== 'play') {
+      this.z -= 12 * dt; this.y = 4 + Math.sin(this.time) * 0.6; this.x = Math.sin(this.time * 0.6) * 2;
+      this.placePlane(dt, Math.cos(this.time * 0.6) * -0.3, 0);
+      this.recycle();
+      if (this.time > 0.5 && input.pressed('go') && (this.state === 'title' || this.time - this.overAt > 1)) { this.reset(); this.state = 'play'; this.audio.sfx('select'); }
+      return;
+    }
+    // steering: keys / stick, or follow the mouse, or drag on touch
+    let ax = input.axis('left', 'right') + input.stick.x, ay = input.axis('down', 'up') - input.stick.y;
+    const p = input.pointer;
+    if (p.type === 'mouse' && (p.x !== this.lastMx || p.y !== this.lastMy)) { this.mouseT = 2; this.lastMx = p.x; this.lastMy = p.y; }
+    this.mouseT = (this.mouseT || 0) - dt;
+    if (p.type === 'touch' && p.down) {
+      if (this.touch0) { ax = clamp((p.x - this.touch0.x) / 50, -1, 1); ay = clamp(-(p.y - this.touch0.y) / 50, -1, 1); } else this.touch0 = { x: p.x, y: p.y };
+    } else this.touch0 = null;
+    if (this.mouseT > 0 && !ax && !ay) {
+      const tx = ((p.x / this.width) * 2 - 1) * XMAX, ty = YMAX - (p.y / this.height) * (YMAX - YMIN);
+      ax = clamp((tx - this.x) / 2, -1, 1); ay = clamp((ty - this.y) / 2, -1, 1);
+    }
+    this.vx = damp(this.vx, ax * 10, 5, dt); this.vy = damp(this.vy, ay * 7, 5, dt);
+    this.x = clamp(this.x + this.vx * dt, -XMAX, XMAX); this.y = clamp(this.y + this.vy * dt, YMIN, YMAX);
+    this.speed = Math.min(42, this.speed + dt * 0.45);
+    const prevZ = this.z;
+    this.z -= this.speed * dt;
+    this.score += this.speed * dt * 0.5;
+    this.timeLeft -= dt;
+    this.placePlane(dt, -this.vx * 0.06, this.vy * 0.05);
+    if (Math.random() < 0.5) this.particles.emit({ x: this.x + pick([-1.3, 1.3]), y: this.y + 0.05, z: this.z + 0.2 }, { count: 1, speed: [0, 0.2], life: [0.3, 0.6], color: '#ffffff', size: [0.04, 0.08] });
+
+    const me = { x: this.x, y: this.y, z: this.z, r: 0.5 };
+    for (const t of this.things) {
+      if (t.kind === 'ring') {
+        t.node.rotation.z += dt * 0.8;
+        if (!t.passed && prevZ >= t.z && this.z < t.z) {
+          t.passed = true;
+          if (Math.hypot(this.x - t.x, this.y - t.y) < RING_R - 0.2) {
+            this.rings++; this.combo++;
+            const bonus = 100 * Math.min(this.combo, 10);
+            this.score += bonus; this.timeLeft = Math.min(30, this.timeLeft + 2.2);
+            t.node.material = M.ringDone;
+            this.msg = { text: this.combo > 1 ? `+${bonus}  ×${Math.min(this.combo, 10)}` : `+${bonus}`, t: 0.8 };
+            this.audio.tone({ freq: 523 * Math.pow(2, Math.min(this.combo - 1, 12) / 12), dur: 0.18, type: 'triangle', vol: 0.14 });
+            this.audio.tone({ freq: 784 * Math.pow(2, Math.min(this.combo - 1, 12) / 12), dur: 0.22, type: 'triangle', vol: 0.08, delay: 0.06 });
+            this.particles.emit({ x: t.x, y: t.y, z: t.z }, { count: 24, speed: [2, 5], life: [0.3, 0.7], color: ['#ffd23f', '#ffffff'], size: [0.06, 0.14] });
+          } else if (this.combo > 0) { this.combo = 0; this.msg = { text: 'missed a ring', t: 0.8 }; this.audio.tone({ freq: 220, dur: 0.15, type: 'sine', vol: 0.1 }); }
+        }
+      } else if (Math.abs(t.box.z - this.z) < 2 && Collide3D.sphereBox(me, t.box)) return this.crash('CRASHED');
+    }
+    if (this.timeLeft <= 0) { this.timeLeft = 0; return this.crash('OUT OF TIME'); }
+    this.things = this.things.filter((t) => (t.node.position.z < this.z + 12 ? true : (t.node.destroy(), false)));
+    this.recycle();
+    this.spawnAhead();
+  }
+  recycle() {
+    for (const s of this.segments) if (s.position.z - SEG / 2 > this.z + 20) s.position.z -= SEGS * SEG;
+    this.sky.position.z = this.z - 150;
+  }
+  placePlane(dt, roll, pitch) {
+    const pl = this.plane;
+    pl.position.set(this.x, this.y, this.z);
+    pl.rotation.z = damp(pl.rotation.z, clamp(roll * 1.3, -0.8, 0.8), 6, dt);
+    pl.rotation.x = damp(pl.rotation.x, pitch * 3, 6, dt);
+    pl.rotation.y = damp(pl.rotation.y, roll * -0.6, 6, dt);
+    const c = this.camera;
+    c.position.set(damp(c.position.x, this.x * 0.75, 5, dt), damp(c.position.y, this.y + 1.7, 5, dt), this.z + 6.5);
+    c.lookAt(this.x * 0.85, this.y + 0.4, this.z - 8);
+  }
+  crash(why) {
+    this.state = 'over'; this.overAt = this.time; this.why = why;
+    if (why === 'CRASHED') {
+      this.plane.visible = false;
+      this.camera.shake(0.4, 0.5);
+      this.audio.sfx('explode');
+      this.particles.emit({ x: this.x, y: this.y, z: this.z }, { count: 60, speed: [2, 8], life: [0.5, 1.2], color: ['#f5f1ea', '#ff5a3d', '#ffd23f'], gravity: 9, size: [0.08, 0.2] });
+    } else this.audio.sfx('lose');
+    this.final = Math.floor(this.score);
+    this.newBest = this.final > this.best;
+    if (this.newBest) { this.best = this.final; store.set('skyglider:best', this.best); }
+  }
+  drawUI(ctx) {
+    const W = this.width, H = this.height, big = Math.min(W, H);
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ align: 'center', color: '#ffffff', shadow: 'rgba(80,30,40,.5)', shadowOffset: 2, font: 'system-ui, -apple-system, "Segoe UI", sans-serif', weight: '800', size: 16 }, o));
+    if (this.state === 'title') {
+      t('SKY GLIDER', W / 2, H * 0.1, { size: big * 0.11 });
+      t('fly through the gold rings · each one adds time to the clock', W / 2, H * 0.1 + big * 0.13, { size: Math.max(13, big * 0.032), weight: '600' });
+      t('steer with arrows / WASD, the mouse, or drag on touch · dodge the pillars and beams', W / 2, H * 0.1 + big * 0.18, { size: Math.max(11, big * 0.025), weight: '500' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to take off', W / 2, H * 0.84, { size: Math.max(14, big * 0.036) });
+      if (this.best) t(`best ${this.best}`, W / 2, H * 0.84 + big * 0.055, { size: Math.max(12, big * 0.03), weight: '600' });
+      return;
+    }
+    t(String(Math.floor(this.state === 'over' ? this.final : this.score)), W / 2, 14, { size: Math.max(26, big * 0.07) });
+    const frac = this.timeLeft / 30, bw = Math.min(280, W * 0.5), y = 18 + Math.max(26, big * 0.07);
+    ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(W / 2 - bw / 2, y, bw, 8);
+    ctx.fillStyle = this.timeLeft < 5 ? '#ff5a5a' : '#ffffff'; ctx.fillRect(W / 2 - bw / 2, y, bw * frac, 8);
+    t(`${this.timeLeft.toFixed(1)}s`, W / 2 + bw / 2 + 8, y - 4, { size: 13, align: 'left' });
+    t(`◯ ${this.rings}`, 18, 16, { align: 'left', size: 18, color: '#ffe066' });
+    if (this.msg) t(this.msg.text, W / 2, H * 0.3, { size: Math.max(18, big * 0.045), color: '#ffe066', alpha: Math.min(1, this.msg.t * 2) });
+    if (this.state === 'over') {
+      ctx.fillStyle = 'rgba(70,30,50,.45)'; ctx.fillRect(0, H * 0.36, W, H * 0.3);
+      t(this.why, W / 2, H * 0.39, { size: big * 0.08 });
+      t(`score ${this.final} · ${this.rings} rings${this.newBest ? ' · new best!' : `   best ${this.best}`}`, W / 2, H * 0.39 + big * 0.1, { size: Math.max(14, big * 0.035), weight: '600' });
+      if (this.time - this.overAt > 1) t('Space or tap to fly again', W / 2, H * 0.39 + big * 0.16, { size: Math.max(13, big * 0.03), weight: '600' });
+    }
+  }
+}
+
+game.start(new Fly());
+window.skyGlider = game;
+</script>
+</body>
+</html>

@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Mini Putt</title>
+<style>html, body { margin: 0; height: 100%; background: #1c2b3a; overflow: hidden; }</style>
+</head>
+<body>
+<script src="../flint/flint.js"></script>
+<script src="../flint/flint3d.js"></script>
+<script>
+'use strict';
+// Mini Putt: five holes of mini golf. Built with Flint3D.
+const { Game3D, Scene3D, Geometry, Material, Node, mesh } = Flint3D;
+const { text, store, clamp, damp, rand } = Flint;
+
+const game = new Game3D({ touchButtons: [] });
+game.input.bind('shoot', ['Space', 'PadA']);
+game.input.bind('go', ['Space', 'Enter', 'PadA', 'Pointer']);
+
+const R = 0.22, MAX_SPEED = 13, CUP_R = 0.34;
+// walls are { x, z, w, d } boxes; floors are { x, z, w, d } rectangles; sand slows the ball
+const wall = (x, z, w, d) => ({ x, z, w, d });
+const HOLES = [
+  { name: 'Warm-up', par: 2, tee: [0, 5], cup: [0, -5], floors: [[0, 0, 4, 12]],
+    walls: [wall(-2.15, 0, 0.3, 12.6), wall(2.15, 0, 0.3, 12.6), wall(0, 6.15, 4.6, 0.3), wall(0, -6.15, 4.6, 0.3), wall(0, 0.5, 1.4, 0.3)] },
+  { name: 'Dogleg', par: 3, tee: [-3, 5], cup: [3.4, -4], floors: [[-3, 0, 4, 12], [2, -4, 6, 4]],
+    walls: [wall(-5.15, 0, 0.3, 12.6), wall(-3, 6.15, 4.3, 0.3), wall(-0.85, 2, 0.3, 8.3), wall(2, -1.85, 6.3, 0.3), wall(5.15, -4, 0.3, 4.6), wall(0, -6.15, 10.6, 0.3)] },
+  { name: 'Windmill', par: 3, tee: [0, 6], cup: [0, -6], floors: [[0, 0, 6, 14]], spinner: { x: 0, z: 0, len: 4.4, speed: 1.3 },
+    walls: [wall(-3.15, 0, 0.3, 14.6), wall(3.15, 0, 0.3, 14.6), wall(0, 7.15, 6.6, 0.3), wall(0, -7.15, 6.6, 0.3), wall(-2.2, -3.2, 1.4, 0.3), wall(2.2, -3.2, 1.4, 0.3)] },
+  { name: 'Sand Island', par: 3, tee: [-2.5, 6], cup: [2.2, -5.8], floors: [[0, 0, 8, 14]], sand: [[-2.4, -3.2, 2.8, 2.4], [2.6, 2.2, 2.4, 3]],
+    walls: [wall(-4.15, 0, 0.3, 14.6), wall(4.15, 0, 0.3, 14.6), wall(0, 7.15, 8.6, 0.3), wall(0, -7.15, 8.6, 0.3), wall(0, 0, 3, 2), wall(1.5, -3.6, 0.3, 2.6)] },
+  { name: 'Zigzag', par: 3, tee: [-2.6, 7], cup: [-2.6, -7], floors: [[0, 0, 8, 16]],
+    walls: [wall(-4.15, 0, 0.3, 16.6), wall(4.15, 0, 0.3, 16.6), wall(0, 8.15, 8.6, 0.3), wall(0, -8.15, 8.6, 0.3), wall(-1.2, 2.6, 5.6, 0.3), wall(1.2, -2.6, 5.6, 0.3)] },
+];
+
+const M = {
+  grass: new Material({ color: '#4cbf6b' }), grass2: new Material({ color: '#43ad60' }),
+  wood: new Material({ color: '#c48a55' }), sand: new Material({ color: '#e9d39b' }),
+  cup: new Material({ color: '#0a0f0a', unlit: true }), ball: new Material({ color: '#ffffff', emissive: '#222222' }),
+  flag: new Material({ color: '#ff4f5a', doubleSided: true }), pole: new Material({ color: '#e8e8e8' }),
+  spinner: new Material({ color: '#7a4fd0', emissive: '#2a1060' }), dot: new Material({ color: '#ffffff', unlit: true }),
+  ground: new Material({ color: '#1f3a4e' }),
+};
+
+class Golf extends Scene3D {
+  enter() {
+    Object.assign(this.env, { background: '#1c2b3a', fog: [30, 60], sky: '#cfe6ff', ground: '#3a5a46', sunDir: [-0.4, -1, -0.6], sunIntensity: 0.8 });
+    this.camera.fov = 48;
+    this.best = store.get('miniputt:best', null);
+    this.state = 'title';
+    this.aimAngle = -Math.PI / 2; this.power = 0; this.charging = false; this.drag = null;
+    this.load(0);
+  }
+  begin() { this.scores = []; this.load(0); this.state = 'aim'; this.audio.sfx('select'); }
+  load(i) {
+    this.hole = i;
+    this.root.children.slice().forEach((n) => n.destroy());
+    const h = HOLES[i];
+    this.add(mesh(Geometry.plane(80, 80), M.ground, { position: [0, -0.31, 0] }));
+    for (const [x, z, w, d] of h.floors) {
+      this.add(mesh(Geometry.box(w, 0.3, d), M.grass, { position: [x, -0.15, z] }));
+      // mowing stripes
+      for (let k = 0; k < Math.floor(d / 1.2); k += 2) this.add(mesh(Geometry.plane(w, 0.6), M.grass2, { position: [x, 0.002, z - d / 2 + 0.3 + k * 1.2] }));
+    }
+    for (const [x, z, w, d] of h.sand || []) this.add(mesh(Geometry.plane(w, d), M.sand, { position: [x, 0.006, z] }));
+    this.add(mesh(Geometry.merge(h.walls.map((b) => ({ geometry: Geometry.box(b.w, 0.4, b.d), position: [b.x, 0.2, b.z] }))), M.wood));
+    this.add(mesh(Geometry.cylinder(CUP_R, CUP_R, 0.02, 24), M.cup, { position: [h.cup[0], 0.01, h.cup[1]] }));
+    this.add(mesh(Geometry.cylinder(0.03, 0.03, 1.6, 6), M.pole, { position: [h.cup[0], 0.8, h.cup[1]] }));
+    this.flag = this.add(mesh(Geometry.quad(0.6, 0.35), M.flag, { position: [h.cup[0] + 0.3, 1.42, h.cup[1]] }));
+    this.spinner = null;
+    if (h.spinner) {
+      const s = h.spinner;
+      this.add(mesh(Geometry.cylinder(0.3, 0.3, 0.6, 16), M.spinner, { position: [s.x, 0.3, s.z] }));
+      this.spinner = this.add(mesh(Geometry.box(s.len, 0.3, 0.25), M.spinner, { position: [s.x, 0.25, s.z] }));
+      this.spinner.def = s;
+    }
+    this.ballNode = this.add(mesh(Geometry.sphere(R, 16, 12), M.ball));
+    this.dots = [];
+    for (let k = 0; k < 9; k++) this.dots.push(this.add(mesh(Geometry.sphere(0.06, 6, 4), M.dot, { visible: false })));
+    this.ball = { x: h.tee[0], z: h.tee[1], vx: 0, vz: 0, y: R, sinking: false };
+    this.strokes = 0;
+    // aim toward the cup to start
+    this.aimAngle = Math.atan2(h.cup[1] - h.tee[1], h.cup[0] - h.tee[0]);
+    // frame the whole hole
+    const xs = h.walls.flatMap((b) => [b.x - b.w / 2, b.x + b.w / 2]), zs = h.walls.flatMap((b) => [b.z - b.d / 2, b.z + b.d / 2]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cz = (Math.min(...zs) + Math.max(...zs)) / 2, ext = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs));
+    this.view = { cx, cz, ext };
+    this.banner = { text: `HOLE ${i + 1} · ${h.name.toUpperCase()} · PAR ${h.par}`, t: 2.2 };
+    this.syncBall();
+  }
+  syncBall() { this.ballNode.position.set(this.ball.x, this.ball.y, this.ball.z); }
+  get moving() { return Math.hypot(this.ball.vx, this.ball.vz) > 0.02; }
+  shoot(power) {
+    if (power < 0.04) return;
+    const sp = power * MAX_SPEED;
+    this.ball.vx = Math.cos(this.aimAngle) * sp; this.ball.vz = Math.sin(this.aimAngle) * sp;
+    this.strokes++;
+    this.state = 'rolling';
+    this.audio.tone({ freq: 200 + power * 300, dur: 0.08, type: 'triangle', vol: 0.2 });
+    this.audio.noise({ dur: 0.05, vol: 0.12, freq: 3000 });
+  }
+  // screen drag → world direction, using how the ground's axes look on screen
+  screenToGround(dx, dy) {
+    const b = this.ball, o = this.toScreen({ x: b.x, y: 0, z: b.z }), ax = this.toScreen({ x: b.x + 1, y: 0, z: b.z }), az = this.toScreen({ x: b.x, y: 0, z: b.z + 1 });
+    const a = ax.x - o.x, c = ax.y - o.y, bb = az.x - o.x, d = az.y - o.y, det = a * d - bb * c || 1;
+    return { x: (d * dx - bb * dy) / det, z: (-c * dx + a * dy) / det, pxPerUnit: Math.hypot(a, c) };
+  }
+  collide(b) {
+    const h = HOLES[this.hole], boxes = h.walls.slice();
+    for (const w of boxes) this.bounce(b, w.x, w.z, w.w, w.d, 0);
+    if (this.spinner) {
+      const s = this.spinner.def, ang = this.spinner.rotation.y;
+      // test in the bar's own space
+      const c = Math.cos(ang), sn = Math.sin(ang), lx = (b.x - s.x) * c - (b.z - s.z) * sn, lz = (b.x - s.x) * sn + (b.z - s.z) * c;
+      const loc = { x: lx, z: lz, vx: b.vx * c - b.vz * sn, vz: b.vx * sn + b.vz * c };
+      if (this.bounce(loc, 0, 0, s.len, 0.25, 0)) {
+        // the spinning bar gives the ball a shove
+        loc.vz += Math.sign(loc.z) * Math.abs(lx) * s.speed * 0.8;
+        b.x = s.x + loc.x * c + loc.z * sn; b.z = s.z - loc.x * sn + loc.z * c;
+        b.vx = loc.vx * c + loc.vz * sn; b.vz = -loc.vx * sn + loc.vz * c;
+      }
+    }
+  }
+  bounce(b, x, z, w, d) {
+    const cx = clamp(b.x, x - w / 2, x + w / 2), cz = clamp(b.z, z - d / 2, z + d / 2), ox = b.x - cx, oz = b.z - cz, d2 = ox * ox + oz * oz;
+    if (d2 >= R * R) return false;
+    let nx, nz, dist = Math.sqrt(d2);
+    if (dist > 1e-6) { nx = ox / dist; nz = oz / dist; }
+    else { const l = b.x - (x - w / 2), r = x + w / 2 - b.x, t = b.z - (z - d / 2), bt = z + d / 2 - b.z, m = Math.min(l, r, t, bt); [nx, nz] = m === l ? [-1, 0] : m === r ? [1, 0] : m === t ? [0, -1] : [0, 1]; dist = 0; }
+    b.x += nx * (R - dist); b.z += nz * (R - dist);
+    const vn = b.vx * nx + b.vz * nz;
+    if (vn < 0) {
+      b.vx -= 1.8 * vn * nx; b.vz -= 1.8 * vn * nz;
+      if (b === this.ball && vn < -0.8) this.audio.tone({ freq: 160 + Math.min(-vn, 10) * 30, dur: 0.05, type: 'square', vol: Math.min(0.15, -vn * 0.02) });
+    }
+    return true;
+  }
+  update(dt) {
+    const input = this.input, b = this.ball, h = HOLES[this.hole];
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.spinner) this.spinner.rotation.y += this.spinner.def.speed * dt;
+    this.flag.rotation.y = Math.sin(this.time * 2) * 0.3;
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    this.placeCamera(dt);
+    if (this.state === 'title' || this.state === 'card') {
+      if (this.time > 0.4 && input.pressed('go') && (this.state === 'title' || this.time - this.cardAt > 1)) this.begin();
+      return;
+    }
+
+    if (this.state === 'aim') {
+      // keyboard: turn with ←/→, hold Space to charge, release to putt
+      this.aimAngle += input.axis('left', 'right') * 1.8 * dt;
+      if (input.pressed('shoot')) { this.charging = true; this.chargeT = 0; }
+      if (this.charging) { this.chargeT += dt; this.power = 1 - Math.abs(((this.chargeT * 0.9) % 2) - 1); }
+      if (this.charging && input.released('shoot')) { this.charging = false; this.shoot(this.power); this.power = 0; }
+      // mouse/touch: drag back from anywhere, like a slingshot, then let go
+      const p = input.pointer;
+      if (p.pressed && !this.charging) this.drag = { x: p.x, y: p.y };
+      if (this.drag && p.down) {
+        const g = this.screenToGround(p.x - this.drag.x, p.y - this.drag.y), len = Math.hypot(g.x, g.z);
+        if (len * g.pxPerUnit > 6) { this.aimAngle = Math.atan2(-g.z, -g.x); this.power = clamp((len * g.pxPerUnit) / 160, 0, 1); }
+      }
+      if (this.drag && p.released) { this.drag = null; this.shoot(this.power); this.power = 0; }
+    }
+
+    if (this.state === 'rolling') {
+      const steps = Math.ceil((Math.hypot(b.vx, b.vz) * dt) / (R * 0.5)) || 1;
+      for (let s = 0; s < steps; s++) {
+        b.x += (b.vx * dt) / steps; b.z += (b.vz * dt) / steps;
+        this.collide(b);
+      }
+      const inSand = (h.sand || []).some(([x, z, w, d]) => Math.abs(b.x - x) < w / 2 && Math.abs(b.z - z) < d / 2);
+      const sp = Math.hypot(b.vx, b.vz), slow = Math.max(0, sp - (inSand ? 6 : 0.9) * dt) * Math.exp(-(inSand ? 2.5 : 0.45) * dt);
+      if (sp > 0) { b.vx *= slow / sp; b.vz *= slow / sp; }
+      this.ballNode.rotation.x += b.vz * dt / R; this.ballNode.rotation.z -= b.vx * dt / R;
+      const dc = Math.hypot(b.x - h.cup[0], b.z - h.cup[1]);
+      if (dc < CUP_R && slow < 5.5) this.sink();
+      else if (dc < CUP_R * 1.6 && slow < 2.5) { b.vx += ((h.cup[0] - b.x) / dc) * 4 * dt; b.vz += ((h.cup[1] - b.z) / dc) * 4 * dt; } // gentle pull at the lip
+      if (!this.moving && this.state === 'rolling') {
+        b.vx = b.vz = 0;
+        if (this.strokes >= 8) { this.strokes = 9; this.sink(true); }
+        else { this.state = 'aim'; this.aimAngle = Math.atan2(h.cup[1] - b.z, h.cup[0] - b.x); }
+      }
+      this.syncBall();
+    }
+    if (this.state === 'sinking') { b.y = damp(b.y, -0.4, 8, dt); this.syncBall(); }
+
+    // aim guide
+    const showAim = this.state === 'aim';
+    this.dots.forEach((d, k) => {
+      d.visible = showAim;
+      const dist = 0.45 + k * (0.25 + this.power * 0.45);
+      d.position.set(b.x + Math.cos(this.aimAngle) * dist, 0.08, b.z + Math.sin(this.aimAngle) * dist);
+      d.scale.set(1, 1, 1).scale(1 - k * 0.06);
+      d.material = this.power > 0.7 && k < 9 * this.power ? M.flag : M.dot;
+    });
+  }
+  sink(gaveUp = false) {
+    this.state = 'sinking';
+    const h = HOLES[this.hole], diff = this.strokes - h.par;
+    this.scores.push(this.strokes);
+    const names = { '-3': 'ALBATROSS!', '-2': 'EAGLE!', '-1': 'BIRDIE!', 0: 'PAR', 1: 'BOGEY', 2: 'DOUBLE BOGEY' };
+    this.banner = { text: gaveUp ? 'PICKED UP (+9)' : this.strokes === 1 ? 'HOLE IN ONE!' : names[diff] || `+${diff}`, t: 2 };
+    if (!gaveUp) {
+      this.audio.sfx(diff <= -1 || this.strokes === 1 ? 'win' : 'coin');
+      this.particles.emit({ x: h.cup[0], y: 0.2, z: h.cup[1] }, { count: diff < 0 ? 60 : 25, speed: [1, 4], velocity: { x: 0, y: 3, z: 0 }, gravity: 6, life: [0.6, 1.2], color: ['#ffe066', '#ff4f5a', '#4dd9e8', '#ffffff'], size: [0.05, 0.12] });
+    }
+    this.timers.after(1.8, () => {
+      if (this.hole + 1 < HOLES.length) { this.load(this.hole + 1); this.state = 'aim'; return; }
+      this.state = 'card'; this.cardAt = this.time;
+      const total = this.scores.reduce((a, s) => a + s, 0);
+      this.newBest = !this.best || total < this.best;
+      if (this.newBest) { this.best = total; store.set('miniputt:best', total); }
+    });
+  }
+  placeCamera(dt) {
+    const v = this.view, cam = this.camera, hgt = v.ext * 1.05 + 2.5, spin = this.state === 'title' ? Math.sin(this.time * 0.3) * 0.5 : 0;
+    cam.position.set(v.cx + Math.sin(spin) * hgt * 0.5, hgt, v.cz + Math.cos(spin) * hgt * 0.5);
+    cam.lookAt(v.cx, 0, v.cz - 0.3);
+  }
+  drawUI(ctx) {
+    const W = this.width, H = this.height, big = Math.min(W, H);
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ color: '#ffffff', shadow: 'rgba(0,0,0,.5)', shadowOffset: 2, font: 'system-ui, -apple-system, "Segoe UI", sans-serif', weight: '700', size: 16 }, o));
+    const par = HOLES.reduce((a, h) => a + h.par, 0);
+    if (this.state === 'title') {
+      t('MINI PUTT', W / 2, H * 0.08, { size: big * 0.11, align: 'center', weight: '900', color: '#ffe066' });
+      t(`five holes · par ${par}`, W / 2, H * 0.08 + big * 0.13, { size: Math.max(14, big * 0.035), align: 'center' });
+      t('drag back from anywhere and let go to putt · or ←/→ to aim and hold Space for power', W / 2, H * 0.08 + big * 0.19, { size: Math.max(11, big * 0.024), align: 'center', weight: '500' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to tee off', W / 2, H * 0.86, { size: Math.max(14, big * 0.035), align: 'center' });
+      if (this.best) t(`best round ${this.best} (${this.best - par >= 0 ? '+' : ''}${this.best - par})`, W / 2, H * 0.86 + big * 0.055, { size: Math.max(12, big * 0.028), align: 'center', weight: '500', color: '#8dffa8' });
+      return;
+    }
+    const h = HOLES[this.hole], done = this.scores.reduce((a, s) => a + s, 0), parSoFar = HOLES.slice(0, this.scores.length).reduce((a, x) => a + x.par, 0);
+    t(`HOLE ${this.hole + 1}/${HOLES.length}`, 16, 14, { size: 18 });
+    t(`par ${h.par} · strokes ${this.strokes}`, 16, 38, { size: 14, weight: '500' });
+    if (this.scores.length) t(`total ${done} (${done - parSoFar >= 0 ? '+' : ''}${done - parSoFar})`, W - 16, 14, { size: 16, align: 'right' });
+    if (this.state === 'aim' && (this.charging || this.drag)) {
+      const bw = Math.min(240, W * 0.5), x = W / 2 - bw / 2, y = H - 40;
+      ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(x, y, bw, 12);
+      ctx.fillStyle = this.power > 0.8 ? '#ff4f5a' : this.power > 0.5 ? '#ffd23f' : '#8dffa8'; ctx.fillRect(x, y, bw * this.power, 12);
+    } else if (this.state === 'aim' && this.strokes === 0 && this.hole === 0) t(this.input.touchActive ? 'drag back and let go' : 'drag back with the mouse, or ←/→ and hold Space', W / 2, H - 44, { size: 14, align: 'center', weight: '500' });
+    if (this.banner) t(this.banner.text, W / 2, H * 0.18, { size: Math.max(18, big * 0.05), align: 'center', color: '#ffe066', alpha: Math.min(1, this.banner.t * 2) });
+    if (this.state === 'card') {
+      ctx.fillStyle = 'rgba(16,24,34,.82)'; ctx.fillRect(0, 0, W, H);
+      const cw = Math.min(420, W - 40), x0 = W / 2 - cw / 2, colW = cw / (HOLES.length + 1);
+      t('SCORECARD', W / 2, H * 0.16, { size: big * 0.06, align: 'center', color: '#ffe066' });
+      const y = H * 0.32;
+      t('hole', x0, y, { size: 13, weight: '500' }); t('par', x0, y + 26, { size: 13, weight: '500' }); t('you', x0, y + 52, { size: 13, weight: '500' });
+      HOLES.forEach((hh, i) => {
+        const cx = x0 + colW * (i + 1) + colW / 2, s = this.scores[i], col = s < hh.par ? '#8dffa8' : s > hh.par ? '#ff8a8a' : '#ffffff';
+        t(String(i + 1), cx, y, { size: 13, align: 'center' }); t(String(hh.par), cx, y + 26, { size: 13, align: 'center', weight: '500' }); t(String(s), cx, y + 52, { size: 15, align: 'center', color: col });
+      });
+      t(`${done} strokes (${done - par >= 0 ? '+' : ''}${done - par})${this.newBest ? '  · new best!' : ''}`, W / 2, y + 96, { size: Math.max(16, big * 0.04), align: 'center' });
+      if (this.time - this.cardAt > 1) t('Space or tap to play again', W / 2, y + 136, { size: 14, align: 'center', weight: '500', color: '#cfe6ff' });
+    }
+  }
+}
+
+game.start(new Golf());
+window.miniPutt = game;
+</script>
+</body>
+</html>

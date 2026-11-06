@@ -64,6 +64,38 @@ A brick breaker with five levels. They loop, getting faster each time.
 - Silver bricks take two hits, dark steel ones can't be broken (except by explosions), and ✸ bricks blow up their neighbors
 - Capsules: **W** wide paddle, **M** multiball, **S** slow ball, **L** extra life. Break bricks without touching the paddle to build a combo
 
+### Mini Putt
+Open [`mini-putt/index.html`](mini-putt/index.html). A 3D game built with Flint3D.
+
+Five holes of mini golf (par 14): a warm-up, a dogleg, a spinning windmill bar, a sand trap island and a zigzag.
+
+- **Putt:** drag back from anywhere and let go, like a slingshot. The farther you drag, the harder the shot. Or turn with ←/→, hold Space to charge, and release
+- Sand slows the ball down, and the windmill bar knocks it around. After 8 strokes you pick up and take 9
+- A scorecard at the end shows birdies in green and bogeys in red. Your best round is saved
+
+### Sky Glider
+Open [`sky-glider/index.html`](sky-glider/index.html). A 3D game built with Flint3D.
+
+Fly a glider down a sunset canyon. Every gold ring you fly through adds time to the clock, and rings in a row multiply your points. Pillars and beams start appearing once you're under way, and you keep speeding up.
+
+- **Steer:** arrows or WASD, the mouse, or drag on a touch screen
+- The game ends when you crash or the clock runs out. Your best score is saved
+
+### Beat Lanes
+Open [`beat-lanes/index.html`](beat-lanes/index.html). Built with Flint.
+
+A rhythm game. Notes fall down four lanes, and you hit each one as it crosses the line. The music (drums, bass and chords) is synthesized in code, and each note you hit plays part of the melody.
+
+- **Hit:** D F J K (or ← ↓ ↑ →), or tap the lanes on a touch screen. Multi-touch works for two-note chords
+- Easy, Normal and Hard each have their own note chart. You're graded Perfect, Great, Good or Miss on every note, and S to D at the end. Your best score per difficulty is saved
+
+### Tile Twins
+Open [`tile-twins/index.html`](tile-twins/index.html). Built with Flint.
+
+A memory puzzle. Flip two tiles at a time to find matching pairs, across three boards that get bigger (6, 10 and 12 pairs). Fewer flips earn more stars, up to 9 in total.
+
+- **Flip:** click or tap a tile, or use the arrow keys and Space
+
 ### Sparkwood
 Open [`sparkwood/index.html`](sparkwood/index.html) in a browser. It's built with Flint and works offline.
 

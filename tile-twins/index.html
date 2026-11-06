@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Tile Twins</title>
+<style>html, body { margin: 0; height: 100%; background: #12202b; overflow: hidden; } canvas { display: block; width: 100%; height: 100%; }</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="../flint/flint.js"></script>
+<script>
+'use strict';
+// Tile Twins: flip tiles two at a time and match every pair. Built with Flint.
+const { Game, Scene, text, store, damp, clamp, random } = Flint;
+
+const W = 360, H = 240;
+const game = new Game({ canvas: '#game', width: W, height: H, background: '#12202b', letterbox: '#12202b', touchButtons: [] });
+game.input.bind('flip', ['Space', 'Enter', 'PadA']);
+
+const LEVELS = [{ cols: 4, rows: 3 }, { cols: 5, rows: 4 }, { cols: 6, rows: 4 }];
+const COLORS = ['#ff6b8b', '#ffb347', '#ffe066', '#8dffa8', '#4dd9e8', '#7aa7ff', '#b98cff', '#ff8fd0', '#f2f2f2', '#ff7a4d', '#57e0a0', '#c7a6ff'];
+const SHAPES = ['circle', 'square', 'triangle', 'diamond', 'star', 'ring', 'cross', 'hex', 'moon', 'bolt', 'heart', 'wave'];
+
+function drawSymbol(ctx, shape, color, s) {
+  ctx.fillStyle = color; ctx.strokeStyle = color; ctx.lineWidth = s * 0.14; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const r = s * 0.36;
+  ctx.beginPath();
+  const poly = (n, rad, rot = -Math.PI / 2) => { for (let i = 0; i < n; i++) { const a = rot + (i / n) * Math.PI * 2; ctx.lineTo(Math.cos(a) * rad, Math.sin(a) * rad); } ctx.closePath(); };
+  switch (shape) {
+    case 'circle': ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); break;
+    case 'square': ctx.rect(-r * 0.85, -r * 0.85, r * 1.7, r * 1.7); ctx.fill(); break;
+    case 'triangle': poly(3, r * 1.1); ctx.fill(); break;
+    case 'diamond': poly(4, r * 1.1); ctx.fill(); break;
+    case 'hex': poly(6, r); ctx.fill(); break;
+    case 'star': for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + (i / 10) * Math.PI * 2, rr = i % 2 ? r * 0.45 : r * 1.1; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.closePath(); ctx.fill(); break;
+    case 'ring': ctx.arc(0, 0, r * 0.8, 0, Math.PI * 2); ctx.stroke(); break;
+    case 'cross': ctx.moveTo(-r, -r); ctx.lineTo(r, r); ctx.moveTo(r, -r); ctx.lineTo(-r, r); ctx.stroke(); break;
+    case 'moon': ctx.arc(0, 0, r, Math.PI * 0.3, Math.PI * 1.7); ctx.arc(r * 0.45, 0, r * 0.72, Math.PI * 1.55, Math.PI * 0.45, true); ctx.fill(); break;
+    case 'bolt': ctx.moveTo(r * 0.3, -r * 1.1); ctx.lineTo(-r * 0.6, r * 0.1); ctx.lineTo(0, r * 0.1); ctx.lineTo(-r * 0.3, r * 1.1); ctx.lineTo(r * 0.6, -r * 0.1); ctx.lineTo(0, -r * 0.1); ctx.closePath(); ctx.fill(); break;
+    case 'heart': ctx.moveTo(0, r); ctx.bezierCurveTo(-r * 1.6, -r * 0.2, -r * 0.6, -r * 1.3, 0, -r * 0.45); ctx.bezierCurveTo(r * 0.6, -r * 1.3, r * 1.6, -r * 0.2, 0, r); ctx.fill(); break;
+    case 'wave': for (let i = 0; i <= 12; i++) { const x = -r + (i / 12) * r * 2; ctx.lineTo(x, Math.sin(i / 12 * Math.PI * 2) * r * 0.45); } ctx.stroke(); break;
+  }
+}
+
+class Play extends Scene {
+  enter() { this.state = 'title'; this.cursor = 0; this.kbd = false; this.best = store.get('tiletwins:best', null); }
+  begin() { Object.assign(this, { level: 0, totalMoves: 0, totalTime: 0, stars: [] }); this.load(0); this.audio.sfx('select'); }
+  load(i) {
+    const { cols, rows } = LEVELS[i], pairs = (cols * rows) / 2;
+    const syms = random.shuffle(SHAPES.map((s, k) => ({ shape: s, color: COLORS[k] }))).slice(0, pairs);
+    const deck = random.shuffle([...syms, ...syms]);
+    const gap = 6, size = Math.min((W - 30 - gap * (cols - 1)) / cols, (H - 46 - gap * (rows - 1)) / rows);
+    const ox = (W - (size * cols + gap * (cols - 1))) / 2, oy = 32 + (H - 36 - (size * rows + gap * (rows - 1))) / 2;
+    this.cards = deck.map((sym, k) => ({ sym, x: ox + (k % cols) * (size + gap), y: oy + Math.floor(k / cols) * (size + gap), s: size, state: 'down', flip: 0, pop: 0 }));
+    Object.assign(this, { cols, pairs, matched: 0, moves: 0, levelTime: 0, open: [], lock: 0, combo: 0, state: 'play', banner: { text: `BOARD ${i + 1} OF ${LEVELS.length}`, t: 1.5 } });
+    this.cursor = 0;
+  }
+  flip(card) {
+    if (this.lock > 0 || card.state !== 'down' || this.open.length >= 2) return;
+    card.state = 'up';
+    this.open.push(card);
+    this.audio.tone({ freq: 520, dur: 0.06, type: 'triangle', vol: 0.08 });
+    if (this.open.length < 2) return;
+    this.moves++;
+    const [a, b] = this.open;
+    if (a.sym === b.sym) {
+      a.state = b.state = 'done'; this.open = []; this.matched++; this.combo++;
+      this.timers.after(0.2, () => {
+        a.pop = b.pop = 1;
+        this.audio.tone({ freq: 660 * Math.pow(2, Math.min(this.combo - 1, 8) / 12), dur: 0.15, type: 'triangle', vol: 0.12 });
+        this.audio.tone({ freq: 990 * Math.pow(2, Math.min(this.combo - 1, 8) / 12), dur: 0.2, type: 'triangle', vol: 0.08, delay: 0.07 });
+        for (const c of [a, b]) this.particles.emit(c.x + c.s / 2, c.y + c.s / 2, { count: 14, speed: [20, 70], life: [0.3, 0.6], color: [c.sym.color, '#ffffff'], size: [1, 2.5] });
+        if (this.combo >= 2) this.banner = { text: `${this.combo} IN A ROW`, t: 0.9 };
+      });
+      if (this.matched === this.pairs) this.finishLevel();
+    } else {
+      this.combo = 0;
+      this.lock = 0.8;
+      this.timers.after(0.8, () => { a.state = b.state = 'down'; this.open = []; this.audio.tone({ freq: 260, dur: 0.08, type: 'sine', vol: 0.08 }); });
+    }
+  }
+  finishLevel() {
+    const ratio = this.moves / this.pairs, stars = ratio <= 1.6 ? 3 : ratio <= 2.3 ? 2 : 1;
+    this.stars.push(stars); this.totalMoves += this.moves; this.totalTime += this.levelTime;
+    this.audio.sfx('win');
+    this.state = 'cleared';
+    this.timers.after(1.6, () => {
+      if (this.level + 1 < LEVELS.length) { this.level++; this.load(this.level); return; }
+      this.state = 'done'; this.doneAt = this.time;
+      const total = this.stars.reduce((a, b) => a + b, 0);
+      this.newBest = !this.best || total > this.best.stars || (total === this.best.stars && this.totalMoves < this.best.moves);
+      if (this.newBest) { this.best = { stars: total, moves: this.totalMoves, time: this.totalTime }; store.set('tiletwins:best', this.best); }
+    });
+  }
+  cardAt(x, y) { return this.cards.find((c) => x >= c.x && x < c.x + c.s && y >= c.y && y < c.y + c.s); }
+  update(dt) {
+    const input = this.input, p = input.pointer;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.state === 'title' || this.state === 'done') {
+      if (this.time > 0.4 && (input.pressed('flip') || p.pressed) && (this.state === 'title' || this.time - this.doneAt > 1)) this.begin();
+      return;
+    }
+    this.lock = Math.max(0, this.lock - dt);
+    if (this.state === 'play') this.levelTime += dt;
+    for (const c of this.cards) { c.flip = damp(c.flip, c.state === 'down' ? 0 : 1, 14, dt); c.pop = Math.max(0, c.pop - dt * 2.5); }
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    if (this.state !== 'play') return;
+    // keyboard cursor
+    const n = this.cards.length, cols = this.cols;
+    const mv = (d) => { this.kbd = true; this.cursor = clamp(this.cursor + d, 0, n - 1); };
+    if (input.pressed('left') && this.cursor % cols > 0) mv(-1);
+    if (input.pressed('right') && this.cursor % cols < cols - 1) mv(1);
+    if (input.pressed('up') && this.cursor >= cols) mv(-cols);
+    if (input.pressed('down') && this.cursor + cols < n) mv(cols);
+    if (input.pressed('flip')) { this.kbd = true; this.flip(this.cards[this.cursor]); }
+    if (p.pressed) { const c = this.cardAt(p.x, p.y); if (c) { this.kbd = false; this.cursor = this.cards.indexOf(c); this.flip(c); } }
+  }
+  drawBackground(ctx) {
+    ctx.fillStyle = '#12202b'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(255,255,255,.025)';
+    for (let i = 0; i < 12; i++) { ctx.beginPath(); ctx.arc((i * 71 + this.time * 4) % (W + 60) - 30, (i * 47) % H, 18 + (i % 4) * 8, 0, Math.PI * 2); ctx.fill(); }
+  }
+  drawWorld(ctx) {
+    if (!this.cards || this.state === 'title') return;
+    this.cards.forEach((c, k) => {
+      const sx = Math.abs(Math.cos(c.flip * Math.PI)), face = c.flip > 0.5, cx = c.x + c.s / 2, cy = c.y + c.s / 2, pop = 1 + Math.sin(c.pop * Math.PI) * 0.12;
+      ctx.save(); ctx.translate(cx, cy); ctx.scale(Math.max(0.02, sx) * pop, pop);
+      const r = c.s * 0.14;
+      ctx.beginPath(); ctx.roundRect(-c.s / 2, -c.s / 2, c.s, c.s, r);
+      if (face) {
+        ctx.fillStyle = c.state === 'done' ? '#1d3342' : '#f4efe6'; ctx.fill();
+        if (c.state === 'done') { ctx.strokeStyle = c.sym.color; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.6; ctx.stroke(); ctx.globalAlpha = 1; }
+        drawSymbol(ctx, c.sym.shape, c.state === 'done' ? c.sym.color : shade(c.sym.color), c.s);
+      } else {
+        const g = ctx.createLinearGradient(0, -c.s / 2, 0, c.s / 2);
+        g.addColorStop(0, '#3e6a8a'); g.addColorStop(1, '#2a4a63');
+        ctx.fillStyle = g; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.beginPath(); ctx.arc(0, 0, c.s * 0.16, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+      if (this.kbd && k === this.cursor && this.state === 'play') { ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(c.x - 3, c.y - 3, c.s + 6, c.s + 6, c.s * 0.18); ctx.stroke(); }
+    });
+  }
+  drawUI(ctx) {
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ size: 8, color: '#e8f0f6', font: 'system-ui, -apple-system, "Segoe UI", sans-serif', weight: '600' }, o));
+    if (this.state === 'title') {
+      t('TILE TWINS', W / 2, 46, { size: 26, align: 'center', weight: '800', color: '#ffe066' });
+      t('flip two tiles at a time and match every pair', W / 2, 84, { size: 9, align: 'center' });
+      t('fewer flips earn more stars · three boards, each bigger than the last', W / 2, 100, { size: 7, align: 'center', color: '#9fb6c6' });
+      t('click or tap tiles · or arrow keys and Space', W / 2, 114, { size: 7, align: 'center', color: '#9fb6c6' });
+      ['circle', 'star', 'heart', 'bolt', 'hex'].forEach((s, i) => { ctx.save(); ctx.translate(W / 2 - 80 + i * 40, 148 + Math.sin(this.time * 2 + i) * 3); drawSymbol(ctx, s, COLORS[i * 2], 28); ctx.restore(); });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to start', W / 2, 186, { size: 9, align: 'center', color: '#ffe066' });
+      if (this.best) t(`best: ${this.best.stars} of 9 stars in ${this.best.moves} moves`, W / 2, 204, { size: 7, align: 'center', color: '#8dffa8' });
+      return;
+    }
+    if (this.state === 'done') {
+      const total = this.stars.reduce((a, b) => a + b, 0);
+      t('ALL BOARDS CLEARED', W / 2, 50, { size: 18, align: 'center', weight: '800', color: '#ffe066' });
+      this.stars.forEach((s, i) => t(`board ${i + 1}   ${'★'.repeat(s)}${'☆'.repeat(3 - s)}`, W / 2, 86 + i * 16, { size: 10, align: 'center' }));
+      t(`${total} of 9 stars · ${this.totalMoves} moves · ${Math.round(this.totalTime)}s${this.newBest ? ' · new best!' : ''}`, W / 2, 144, { size: 9, align: 'center', color: '#8dffa8' });
+      if (this.time - this.doneAt > 1) t('press Space or tap to play again', W / 2, 176, { size: 9, align: 'center', color: '#ffe066' });
+      return;
+    }
+    t(`BOARD ${this.level + 1}`, 12, 10, { size: 9, weight: '800', color: '#ffe066' });
+    t(`pairs ${this.matched}/${this.pairs}   moves ${this.moves}   ${Math.floor(this.levelTime)}s`, W - 12, 10, { size: 8, align: 'right' });
+    if (this.banner) t(this.banner.text, W / 2, 10, { size: 9, align: 'center', weight: '800', color: '#8dffa8', alpha: Math.min(1, this.banner.t * 2) });
+    if (this.state === 'cleared') {
+      const s = this.stars[this.stars.length - 1];
+      ctx.fillStyle = 'rgba(18,32,43,.75)'; ctx.fillRect(0, 90, W, 60);
+      t('BOARD CLEARED', W / 2, 98, { size: 16, align: 'center', weight: '800', color: '#ffe066' });
+      t(`${'★'.repeat(s)}${'☆'.repeat(3 - s)}   ${this.moves} moves`, W / 2, 124, { size: 11, align: 'center' });
+    }
+  }
+}
+// face symbols are drawn a little darker so they read on the light tiles
+function shade(hex) { const n = parseInt(hex.slice(1), 16), f = 0.78; return `rgb(${((n >> 16) & 255) * f | 0},${((n >> 8) & 255) * f | 0},${(n & 255) * f | 0})`; }
+
+game.start(new Play());
+window.tileTwins = game;
+</script>
+</body>
+</html>

@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Star Sweeper</title>
+<style>html, body { margin: 0; height: 100%; background: #05040d; overflow: hidden; } canvas { display: block; width: 100%; height: 100%; }</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="../flint/flint.js"></script>
+<script>
+'use strict';
+// Star Sweeper: a neon arena shooter built with Flint.
+const { Game, Scene, Entity, text, store, rand, randInt, pick, chance, clamp, damp, approach } = Flint;
+
+const W = 400, H = 225;
+const game = new Game({ canvas: '#game', width: W, height: H, background: '#05040d', letterbox: '#05040d', touchButtons: ['b'] });
+game.input.bind('bomb', ['KeyX', 'ShiftLeft', 'KeyB', 'PadB', 'PadX', 'TouchB']);
+game.input.bind('start', ['Enter', 'Space', 'PadA', 'PadStart', 'Pointer']);
+
+const glow = (ctx, color, blur, fn) => { ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = blur; fn(); ctx.restore(); };
+
+class Body extends Entity {
+  constructor(x, y, r, props) { super(Object.assign({ x: x - r, y: y - r, w: r * 2, h: r * 2 }, props)); this.r = r; }
+  get px() { return this.x + this.r; }
+  get py() { return this.y + this.r; }
+  place(x, y) { this.x = x - this.r; this.y = y - this.r; }
+  hits(o) { const dx = this.px - o.px, dy = this.py - o.py, r = this.r + o.r; return dx * dx + dy * dy < r * r; }
+}
+
+class Ship extends Body {
+  constructor() { super(W / 2, H / 2, 5, { tags: ['ship'], z: 10 }); this.aim = -Math.PI / 2; this.invuln = 0; this.shield = false; }
+  draw(ctx) {
+    if (this.invuln > 0 && Math.floor(this.invuln * 14) % 2) return;
+    const x = this.px, y = this.py, a = this.aim;
+    glow(ctx, '#29e3ff', 8, () => {
+      ctx.strokeStyle = '#bff9ff'; ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(a) * 8, y + Math.sin(a) * 8);
+      ctx.lineTo(x + Math.cos(a + 2.5) * 6, y + Math.sin(a + 2.5) * 6);
+      ctx.lineTo(x + Math.cos(a + Math.PI) * 2, y + Math.sin(a + Math.PI) * 2);
+      ctx.lineTo(x + Math.cos(a - 2.5) * 6, y + Math.sin(a - 2.5) * 6);
+      ctx.closePath(); ctx.stroke();
+    });
+    if (this.shield) glow(ctx, '#5aa9ff', 10, () => { ctx.strokeStyle = 'rgba(120,180,255,.8)'; ctx.beginPath(); ctx.arc(x, y, 11 + Math.sin(this.scene.time * 6), 0, Math.PI * 2); ctx.stroke(); });
+  }
+}
+
+class Bullet extends Body {
+  constructor(x, y, a, enemy) {
+    super(x, y, enemy ? 3 : 2, { tags: [enemy ? 'ebullet' : 'bullet'], z: 8 });
+    const sp = enemy ? 70 : 330; this.vx = Math.cos(a) * sp; this.vy = Math.sin(a) * sp; this.life = enemy ? 6 : 0.9; this.enemy = enemy;
+  }
+  update(dt) { this.x += this.vx * dt; this.y += this.vy * dt; if ((this.life -= dt) <= 0 || this.px < -10 || this.px > W + 10 || this.py < -10 || this.py > H + 10) this.destroy(); }
+  draw(ctx) {
+    if (this.enemy) glow(ctx, '#ff5a5a', 8, () => { ctx.fillStyle = '#ffb0b0'; ctx.beginPath(); ctx.arc(this.px, this.py, 2.6, 0, Math.PI * 2); ctx.fill(); });
+    else { ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(this.px, this.py); ctx.lineTo(this.px - this.vx * 0.018, this.py - this.vy * 0.018); ctx.stroke(); }
+  }
+}
+
+const KINDS = {
+  drifter: { r: 6, hp: 1, pts: 10, color: '#ff3fb0' },
+  dasher: { r: 5, hp: 1, pts: 20, color: '#ffd23f' },
+  rock: { r: 12, hp: 3, pts: 15, color: '#9b8cff' },
+  pebble: { r: 6, hp: 1, pts: 5, color: '#9b8cff' },
+  gunner: { r: 7, hp: 2, pts: 30, color: '#29e3ff' },
+};
+
+class Enemy extends Body {
+  constructor(kind, x, y) {
+    const k = KINDS[kind];
+    super(x, y, k.r, { tags: ['enemy'], z: 5 });
+    Object.assign(this, { kind, hp: k.hp, pts: k.pts, color: k.color, t: rand(0, 6), flash: 0, state: 'idle', timer: rand(0.6, 1.4) });
+    if (kind === 'rock' || kind === 'pebble') { const a = rand(0, Math.PI * 2), s = kind === 'rock' ? 22 : 45; this.vx = Math.cos(a) * s; this.vy = Math.sin(a) * s; }
+    this.spin = rand(-2, 2);
+  }
+  update(dt) {
+    const s = this.scene, ship = s.ship, dx = ship.px - this.px, dy = ship.py - this.py, d = Math.hypot(dx, dy) || 1;
+    this.t += dt; this.flash = Math.max(0, this.flash - dt);
+    const speedUp = 1 + s.wave * 0.04;
+    if (this.kind === 'drifter') {
+      this.vx = damp(this.vx, (dx / d) * 42 * speedUp + Math.cos(this.t * 2) * 15, 3, dt);
+      this.vy = damp(this.vy, (dy / d) * 42 * speedUp + Math.sin(this.t * 2.3) * 15, 3, dt);
+    } else if (this.kind === 'dasher') {
+      this.timer -= dt;
+      if (this.state === 'idle') { this.vx = damp(this.vx, 0, 4, dt); this.vy = damp(this.vy, 0, 4, dt); this.aim = Math.atan2(dy, dx); if (this.timer <= 0) { this.state = 'dash'; this.timer = 0.6; this.vx = Math.cos(this.aim) * 210 * speedUp; this.vy = Math.sin(this.aim) * 210 * speedUp; } }
+      else if (this.timer <= 0) { this.state = 'idle'; this.timer = rand(0.9, 1.5); }
+    } else if (this.kind === 'gunner') {
+      const want = d > 110 ? 1 : d < 80 ? -1 : 0;
+      this.vx = damp(this.vx, (dx / d) * 35 * want + (-dy / d) * 25, 2, dt);
+      this.vy = damp(this.vy, (dy / d) * 35 * want + (dx / d) * 25, 2, dt);
+      this.timer -= dt;
+      if (this.timer <= 0) { this.timer = Math.max(1.1, 2.4 - s.wave * 0.08); s.add(new Bullet(this.px, this.py, Math.atan2(dy, dx), true)); s.audio.tone({ freq: 300, to: 180, dur: 0.12, type: 'square', vol: 0.05 }); }
+    }
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    if (this.kind === 'rock' || this.kind === 'pebble') {
+      if (this.px < this.r || this.px > W - this.r) { this.vx *= -1; this.place(clamp(this.px, this.r, W - this.r), this.py); }
+      if (this.py < this.r || this.py > H - this.r) { this.vy *= -1; this.place(this.px, clamp(this.py, this.r, H - this.r)); }
+    } else this.place(clamp(this.px, -20, W + 20), clamp(this.py, -20, H + 20));
+  }
+  draw(ctx) {
+    const x = this.px, y = this.py, r = this.r, c = this.flash > 0 ? '#ffffff' : this.color;
+    glow(ctx, this.color, 8, () => {
+      ctx.strokeStyle = c; ctx.lineWidth = 1.4; ctx.beginPath();
+      if (this.kind === 'drifter') { for (let i = 0; i < 4; i++) { const a = this.t * 2 + (i * Math.PI) / 2; ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } ctx.closePath(); }
+      else if (this.kind === 'dasher') { const a = this.aim || 0; ctx.moveTo(x + Math.cos(a) * r * 1.4, y + Math.sin(a) * r * 1.4); ctx.lineTo(x + Math.cos(a + 2.4) * r, y + Math.sin(a + 2.4) * r); ctx.lineTo(x + Math.cos(a - 2.4) * r, y + Math.sin(a - 2.4) * r); ctx.closePath(); }
+      else if (this.kind === 'gunner') { for (let i = 0; i < 6; i++) { const a = this.t + (i * Math.PI) / 3; ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } ctx.closePath(); ctx.moveTo(x + 2, y); ctx.arc(x, y, 2, 0, Math.PI * 2); }
+      else { for (let i = 0; i < 9; i++) { const a = this.t * this.spin + (i / 9) * Math.PI * 2, rr = r * (0.8 + ((i * 7) % 4) * 0.08); ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } ctx.closePath(); }
+      ctx.stroke();
+    });
+    if (this.kind === 'dasher' && this.state === 'idle' && this.timer < 0.35) { ctx.strokeStyle = 'rgba(255,210,63,.35)'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(this.aim) * 60, y + Math.sin(this.aim) * 60); ctx.stroke(); }
+  }
+}
+
+class Pickup extends Body {
+  constructor(x, y, kind) { super(x, y, kind === 'gem' ? 2.5 : 5, { tags: ['pickup'], z: 4 }); this.kind = kind; this.life = kind === 'gem' ? 8 : 10; this.t = 0; }
+  update(dt) {
+    this.t += dt; this.life -= dt;
+    const s = this.scene.ship, dx = s.px - this.px, dy = s.py - this.py, d = Math.hypot(dx, dy);
+    if (d < 55) { this.x += (dx / d) * 160 * dt; this.y += (dy / d) * 160 * dt; }
+    if (this.life <= 0) this.destroy();
+  }
+  draw(ctx) {
+    if (this.life < 2 && Math.floor(this.life * 8) % 2) return;
+    const x = this.px, y = this.py;
+    if (this.kind === 'gem') { ctx.fillStyle = '#8dffa8'; ctx.save(); ctx.translate(x, y); ctx.rotate(this.t * 3); ctx.fillRect(-2, -2, 4, 4); ctx.restore(); return; }
+    const col = this.kind === 'triple' ? '#29e3ff' : '#5aa9ff';
+    glow(ctx, col, 10, () => { ctx.strokeStyle = col; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.stroke(); });
+    text(ctx, this.kind === 'triple' ? 'T' : 'S', x, y + 0.5, { size: 7, align: 'center', baseline: 'middle', color: col, weight: '700' });
+  }
+}
+
+class Play extends Scene {
+  enter() {
+    this.best = store.get('starsweeper:best', 0);
+    this.stars = Array.from({ length: 90 }, () => ({ x: rand(0, W), y: rand(0, H), z: pick([0.2, 0.5, 1]) }));
+    this.state = 'title';
+    this.ship = this.add(new Ship());
+    this.ship.visible = false;
+    this.mouseAimT = 0;
+  }
+  begin() {
+    this.world.clear(); this.particles.clear(); this.timers.clear();
+    this.ship = this.add(new Ship());
+    Object.assign(this, { score: 0, lives: 3, bombs: 2, wave: 0, gems: 0, mult: 1, fireT: 0, triple: 0, queue: [], shock: null, banner: null, waveDone: false, state: 'play' });
+    this.nextWave();
+    this.audio.sfx('select');
+  }
+  nextWave() {
+    this.wave++;
+    const n = 5 + this.wave * 2, mix = ['drifter', 'drifter', 'drifter'];
+    if (this.wave >= 2) mix.push('rock');
+    if (this.wave >= 3) mix.push('dasher', 'dasher');
+    if (this.wave >= 4) mix.push('gunner');
+    for (let i = 0; i < n; i++) this.queue.push({ kind: pick(mix), at: 0.4 + i * Math.max(0.25, 0.9 - this.wave * 0.05) });
+    this.waveT = 0;
+    this.banner = { text: `WAVE ${this.wave}`, t: 2 };
+    if (this.wave > 1) { this.bombs = Math.min(5, this.bombs + 1); this.audio.sfx('powerup'); }
+  }
+  spawnSpot() {
+    for (let i = 0; i < 20; i++) {
+      const p = pick([[rand(10, W - 10), 10], [rand(10, W - 10), H - 10], [10, rand(10, H - 10)], [W - 10, rand(10, H - 10)]]);
+      if (Math.hypot(p[0] - this.ship.px, p[1] - this.ship.py) > 90) return p;
+    }
+    return [10, 10];
+  }
+  update(dt) {
+    const input = this.input;
+    for (const s of this.stars) { s.y += s.z * 12 * dt; if (s.y > H) { s.y = 0; s.x = rand(0, W); } }
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.state === 'title' || this.state === 'over') {
+      if (this.time > 0.5 && input.pressed('start') && (this.state === 'title' || this.time - this.overAt > 0.8)) this.begin();
+      return;
+    }
+    if (this.state === 'paused') {
+      if (input.pressed('pause') || input.pressed('start')) this.state = 'play';
+      return;
+    }
+    if (input.pressed('pause')) { this.state = 'paused'; return; }
+    const ship = this.ship;
+    // movement: keys/stick, or follow your finger on touch screens
+    let mx = input.axis('left', 'right') + input.stick.x, my = input.axis('up', 'down') + input.stick.y;
+    const p = input.pointer;
+    if (p.down && p.type === 'touch') {
+      const dx = p.x - ship.px, dy = p.y - 22 - ship.py, d = Math.hypot(dx, dy);
+      if (d > 3) { mx = dx / Math.max(d, 25); my = dy / Math.max(d, 25); }
+    }
+    const len = Math.hypot(mx, my); if (len > 1) { mx /= len; my /= len; }
+    ship.vx = damp(ship.vx, mx * 120, 10, dt); ship.vy = damp(ship.vy, my * 120, 10, dt);
+    ship.place(clamp(ship.px + ship.vx * dt, 6, W - 6), clamp(ship.py + ship.vy * dt, 6, H - 6));
+    ship.invuln = Math.max(0, ship.invuln - dt);
+
+    // aiming: the mouse if you're using it, otherwise the nearest enemy
+    if (p.type === 'mouse' && (p.x !== this.lastMx || p.y !== this.lastMy)) { this.mouseAimT = 2.5; this.lastMx = p.x; this.lastMy = p.y; }
+    this.mouseAimT -= dt;
+    const enemies = this.world.query('enemy');
+    if (this.mouseAimT > 0) ship.aim = Math.atan2(p.y - ship.py, p.x - ship.px);
+    else if (enemies.length) {
+      let best = null, bd = 1e9;
+      for (const e of enemies) { const d = Math.hypot(e.px - ship.px, e.py - ship.py); if (d < bd) { bd = d; best = e; } }
+      const want = Math.atan2(best.py - ship.py, best.px - ship.px);
+      let diff = ((want - ship.aim + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      ship.aim += clamp(diff, -10 * dt, 10 * dt);
+    } else if (len > 0.2) ship.aim = Math.atan2(my, mx);
+
+    // auto-fire
+    this.triple = Math.max(0, this.triple - dt);
+    this.fireT -= dt;
+    if (this.fireT <= 0 && (enemies.length || this.mouseAimT > 0)) {
+      this.fireT = 0.11;
+      const spread = this.triple > 0 ? [-0.18, 0, 0.18] : [0];
+      for (const o of spread) this.add(new Bullet(ship.px + Math.cos(ship.aim) * 7, ship.py + Math.sin(ship.aim) * 7, ship.aim + o + rand(-0.03, 0.03), false));
+      this.audio.tone({ freq: 880, to: 440, dur: 0.04, type: 'square', vol: 0.03 });
+    }
+    if (input.pressed('bomb') && this.bombs > 0) this.bomb();
+
+    // spawning
+    this.waveT += dt;
+    while (this.queue.length && this.queue[0].at <= this.waveT) {
+      const q = this.queue.shift(), [x, y] = this.spawnSpot();
+      this.particles.emit(x, y, { count: 10, speed: [10, 30], life: [0.3, 0.5], color: KINDS[q.kind].color, blend: 'lighter' });
+      this.add(new Enemy(q.kind, x, y));
+    }
+    if (!this.queue.length && !enemies.length && !this.waveDone) { this.waveDone = true; this.timers.after(1.4, () => { this.waveDone = false; this.nextWave(); }); }
+
+    // collisions
+    for (const b of this.world.query('bullet')) for (const e of enemies) if (e.alive && b.alive && b.hits(e)) { b.destroy(); this.damage(e); }
+    for (const pk of this.world.query('pickup')) if (pk.hits(ship) || Math.hypot(pk.px - ship.px, pk.py - ship.py) < 9) this.collect(pk);
+    if (ship.invuln <= 0) {
+      for (const e of enemies) if (e.alive && e.hits(ship)) { this.hurt(e); break; }
+      for (const b of this.world.query('ebullet')) if (b.hits(ship)) { b.destroy(); this.hurt(b); break; }
+    }
+    if (this.shock) { this.shock.r += 420 * dt; this.shock.a -= dt * 1.6; if (this.shock.a <= 0) this.shock = null; }
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+  }
+  damage(e) {
+    e.hp--; e.flash = 0.08;
+    if (e.hp > 0) { this.audio.tone({ freq: 200, dur: 0.05, vol: 0.06 }); return; }
+    e.destroy();
+    this.score += Math.round(e.pts * this.mult);
+    this.particles.emit(e.px, e.py, { count: e.r * 2, speed: [20, 90], life: [0.3, 0.7], color: [e.color, '#ffffff'], blend: 'lighter', size: [1, 2.2] });
+    this.audio.noise({ dur: 0.15, vol: 0.12, freq: 2000, to: 300 });
+    if (e.kind === 'rock') for (let i = 0; i < 2; i++) this.add(new Enemy('pebble', e.px + rand(-4, 4), e.py + rand(-4, 4)));
+    this.add(new Pickup(e.px, e.py, 'gem'));
+    if (chance(0.07)) this.add(new Pickup(e.px + 6, e.py, chance(0.5) ? 'triple' : 'shield'));
+  }
+  collect(pk) {
+    pk.destroy();
+    if (pk.kind === 'gem') { this.gems++; this.mult = Math.min(5, 1 + Math.floor(this.gems / 10) * 0.5); this.audio.tone({ freq: 1200 + (this.gems % 10) * 60, dur: 0.05, vol: 0.05, type: 'triangle' }); return; }
+    if (pk.kind === 'triple') this.triple = 10; else this.ship.shield = true;
+    this.audio.sfx('powerup');
+    this.banner = { text: pk.kind === 'triple' ? 'TRIPLE SHOT' : 'SHIELD', t: 1.2 };
+  }
+  bomb() {
+    this.bombs--;
+    this.shock = { x: this.ship.px, y: this.ship.py, r: 0, a: 1 };
+    this.camera.shake(5, 0.4);
+    this.audio.sfx('explode');
+    for (const e of this.world.query('enemy')) { e.hp = 1; this.damage(e); }
+    for (const b of this.world.query('ebullet')) b.destroy();
+  }
+  hurt(src) {
+    const ship = this.ship;
+    if (ship.shield) { ship.shield = false; ship.invuln = 1; this.audio.sfx('hit'); if (src.kind) { src.hp = 1; this.damage(src); } return; }
+    this.lives--; this.gems = 0; this.mult = 1;
+    ship.invuln = 2.2;
+    this.camera.shake(6, 0.45);
+    this.audio.sfx('hurt');
+    this.particles.emit(ship.px, ship.py, { count: 30, speed: [30, 120], life: [0.4, 0.9], color: ['#29e3ff', '#ffffff'], blend: 'lighter' });
+    for (const e of this.world.query('enemy')) { const dx = e.px - ship.px, dy = e.py - ship.py, d = Math.hypot(dx, dy) || 1; if (d < 70) { e.vx = (dx / d) * 160; e.vy = (dy / d) * 160; } }
+    if (this.lives <= 0) {
+      this.state = 'over'; this.overAt = this.time; ship.visible = false;
+      this.audio.sfx('lose');
+      this.newBest = this.score > this.best;
+      if (this.newBest) { this.best = this.score; store.set('starsweeper:best', this.best); }
+    }
+  }
+  blur() { if (this.state === 'play') this.state = 'paused'; }
+  drawBackground(ctx) {
+    for (const s of this.stars) { ctx.fillStyle = `rgba(200,210,255,${0.25 + s.z * 0.6})`; ctx.fillRect(s.x, s.y, s.z > 0.6 ? 1.5 : 1, s.z > 0.6 ? 1.5 : 1); }
+    ctx.strokeStyle = 'rgba(122,44,255,.18)'; ctx.lineWidth = 1; ctx.strokeRect(1.5, 1.5, W - 3, H - 3);
+  }
+  drawWorld(ctx) {
+    if (this.shock) glow(ctx, '#ffffff', 14, () => { ctx.strokeStyle = `rgba(255,255,255,${this.shock.a})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(this.shock.x, this.shock.y, this.shock.r, 0, Math.PI * 2); ctx.stroke(); });
+  }
+  drawUI(ctx) {
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ size: 8, color: '#e8e0ff', shadow: '#000' }, o));
+    if (this.state === 'paused') {
+      ctx.fillStyle = 'rgba(5,4,13,.7)'; ctx.fillRect(0, 0, W, H);
+      t('PAUSED', W / 2, 90, { size: 16, align: 'center', color: '#ffd23f' });
+      t('P, Esc or tap to resume', W / 2, 114, { align: 'center' });
+      return;
+    }
+    if (this.state === 'title') {
+      glow(ctx, '#ff3fb0', 16, () => t('STAR SWEEPER', W / 2, 52, { size: 26, align: 'center', color: '#ffd6f0', weight: '700' }));
+      t('clear the waves · grab gems to raise your multiplier', W / 2, 88, { align: 'center' });
+      t('move: WASD / arrows / drag   aim: mouse (or automatic)   bomb: X', W / 2, 104, { size: 7, align: 'center', color: '#a79cc0' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Enter or tap to start', W / 2, 140, { size: 9, align: 'center', color: '#ffd23f' });
+      if (this.best) t(`best ${this.best}`, W / 2, 165, { size: 8, align: 'center', color: '#8dffa8' });
+      return;
+    }
+    t(String(this.score).padStart(6, '0'), 8, 7, { size: 9, weight: '700' });
+    t(`x${this.mult.toFixed(1)}`, 60, 8, { color: '#8dffa8' });
+    t(`WAVE ${this.wave}`, W - 8, 7, { align: 'right', color: '#a79cc0' });
+    for (let i = 0; i < this.lives; i++) { ctx.strokeStyle = '#bff9ff'; ctx.beginPath(); ctx.moveTo(10 + i * 9, H - 6); ctx.lineTo(13 + i * 9, H - 13); ctx.lineTo(16 + i * 9, H - 6); ctx.closePath(); ctx.stroke(); }
+    t(`BOMBS ${'●'.repeat(this.bombs)}`, W - 8, H - 13, { align: 'right', size: 7, color: '#ffd23f' });
+    if (this.triple > 0) t(`TRIPLE ${Math.ceil(this.triple)}`, W / 2, H - 13, { align: 'center', size: 7, color: '#29e3ff' });
+    if (this.banner) glow(ctx, '#ffd23f', 10, () => t(this.banner.text, W / 2, 60, { size: 16, align: 'center', color: '#ffd23f', alpha: Math.min(1, this.banner.t * 2) }));
+    if (this.state === 'over') {
+      ctx.fillStyle = 'rgba(5,4,13,.65)'; ctx.fillRect(0, 70, W, 90);
+      t('GAME OVER', W / 2, 82, { size: 18, align: 'center', color: '#ff3fb0', weight: '700' });
+      t(`score ${this.score}${this.newBest ? '  · new best!' : `   best ${this.best}`}   wave ${this.wave}`, W / 2, 110, { align: 'center' });
+      if (this.time - this.overAt > 0.8) t('Enter or tap to play again', W / 2, 132, { align: 'center', color: '#ffd23f' });
+    }
+  }
+}
+
+game.start(new Play());
+window.starSweeper = game;
+</script>
+</body>
+</html>

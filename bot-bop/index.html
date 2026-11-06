@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Bot Bop</title>
+<style>html, body { margin: 0; height: 100%; background: #10131f; overflow: hidden; }</style>
+</head>
+<body>
+<script src="../flint/flint.js"></script>
+<script src="../flint/flint3d.js"></script>
+<script>
+'use strict';
+// Bot Bop: bop the robots that pop out of the pipes, but never the red ones. Built with Flint3D.
+const { Game3D, Scene3D, Geometry, Material, Node, mesh } = Flint3D;
+const { text, store, rand, pick, chance, clamp, damp } = Flint;
+
+const game = new Game3D({ touchButtons: [] });
+game.input.bind('start', ['Space', 'Enter', 'PadA', 'Pointer']);
+// keyboard layout matches the 3×3 grid: back row Q W E, middle A S D, front Z X C (or the number pad)
+const KEYS = [['KeyQ', 'Numpad7', 'Digit7'], ['KeyW', 'Numpad8', 'Digit8'], ['KeyE', 'Numpad9', 'Digit9'],
+  ['KeyA', 'Numpad4', 'Digit4'], ['KeyS', 'Numpad5', 'Digit5'], ['KeyD', 'Numpad6', 'Digit6'],
+  ['KeyZ', 'Numpad1', 'Digit1'], ['KeyX', 'Numpad2', 'Digit2'], ['KeyC', 'Numpad3', 'Digit3']];
+const LABELS = ['Q', 'W', 'E', 'A', 'S', 'D', 'Z', 'X', 'C'];
+KEYS.forEach((k, i) => game.input.bind('hole' + i, k));
+
+const ROUND = 60, SP = 1.8, DOWN = -0.95, UP = 0.32;
+const G = {
+  pipe: Geometry.cylinder(0.56, 0.6, 0.5, 24), hole: Geometry.cylinder(0.46, 0.46, 0.02, 24),
+  body: Geometry.cylinder(0.34, 0.38, 0.75, 20), head: Geometry.sphere(0.36, 18, 12), eye: Geometry.box(0.1, 0.13, 0.04),
+  antenna: Geometry.cylinder(0.02, 0.02, 0.25, 6), tip: Geometry.sphere(0.06, 8, 6), spike: Geometry.cone(0.07, 0.22, 8),
+  handle: Geometry.cylinder(0.05, 0.05, 1.3, 8), mallet: Geometry.cylinder(0.22, 0.22, 0.55, 16),
+};
+const TYPES = {
+  bot: { color: '#5aa9ff', eye: '#bff9ff', pts: 1 },
+  gold: { color: '#ffd23f', eye: '#fff7c2', pts: 3 },
+  bomb: { color: '#ff4f5a', eye: '#ffe0e0', pts: 0 },
+};
+
+function makeBot() {
+  const root = new Node();
+  const bodyMat = new Material({ color: '#5aa9ff' }), headMat = new Material({ color: '#5aa9ff' }), eyeMat = new Material({ color: '#000', emissive: '#bff9ff' });
+  root.add(mesh(G.body, bodyMat, { position: [0, 0, 0] }));
+  root.add(mesh(G.head, headMat, { position: [0, 0.52, 0] }));
+  for (const x of [-0.13, 0.13]) root.add(mesh(G.eye, eyeMat, { position: [x, 0.56, 0.34] }));
+  root.add(mesh(G.antenna, { color: '#aab' }, { position: [0, 0.98, 0] }));
+  const tip = root.add(mesh(G.tip, { color: '#000', emissive: '#ff3fb0' }, { position: [0, 1.12, 0] }));
+  const spikes = root.add(new Node());
+  for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; spikes.add(mesh(G.spike, { color: '#2a1015' }, { position: [Math.sin(a) * 0.33, 0.6, Math.cos(a) * 0.33], rotation: [Math.cos(a) * 1.2, 0, -Math.sin(a) * 1.2] })); }
+  return { root, bodyMat, headMat, eyeMat, tip, spikes };
+}
+
+class Bop extends Scene3D {
+  enter() {
+    Object.assign(this.env, { background: '#10131f', fog: [14, 30], sky: '#9db0e0', ground: '#2a2440', sunDir: [-0.3, -1, -0.5], sunIntensity: 0.75 });
+    this.env.lights.push({ position: { x: -3, y: 3, z: 2 }, color: '#ff3fb0', intensity: 0.8, range: 9 }, { position: { x: 3, y: 3, z: 2 }, color: '#29e3ff', intensity: 0.8, range: 9 });
+    this.camera.fov = 50;
+    this.best = store.get('botbop:best', 0);
+    this.add(mesh(Geometry.box(7, 0.8, 7), { color: '#2b2f4a' }, { position: [0, -0.4, 0] }));
+    this.add(mesh(Geometry.box(7.3, 0.12, 7.3), { color: '#000', emissive: '#7a2cff', emissiveIntensity: 0.6 }, { position: [0, -0.06, 0] }));
+    this.add(mesh(Geometry.plane(40, 40), { color: '#181c2e' }, { position: [0, -0.8, 0] }));
+    this.holes = [];
+    for (let i = 0; i < 9; i++) {
+      const gx = (i % 3) - 1, gz = Math.floor(i / 3) - 1, x = gx * SP, z = gz * SP;
+      this.add(mesh(G.pipe, { color: '#3fd28a' }, { position: [x, 0.05, z] }));
+      this.add(mesh(G.hole, { color: '#05060a', unlit: true }, { position: [x, 0.31, z] }));
+      const bot = makeBot();
+      bot.root.position.set(x, DOWN, z);
+      this.add(bot.root);
+      this.holes.push({ i, x, z, bot, type: null, y: DOWN, state: 'down', t: 0, hit: false });
+    }
+    this.mallet = this.add(new Node({ visible: false }));
+    this.malletArm = this.mallet.add(new Node());
+    this.malletArm.add(mesh(G.handle, { color: '#c9a06a' }, { position: [0, 0.65, 0] }));
+    this.malletArm.add(mesh(G.mallet, { color: '#ff7a2c', emissive: '#401a00' }, { position: [0, 1.3, 0], rotation: [0, 0, Math.PI / 2] }));
+    this.swing = 0;
+    this.camera.position.set(0, 6.4, 5.6);
+    this.camera.lookAt(0, 0, 0.35);
+    this.state = 'title';
+    this.popT = 1;
+  }
+  start() {
+    Object.assign(this, { state: 'play', score: 0, hearts: 3, left: ROUND, combo: 0, popT: 0.6, floating: [] });
+    for (const h of this.holes) { h.state = 'down'; h.type = null; }
+    this.audio.sfx('select');
+  }
+  pop(h) {
+    const elapsed = ROUND - this.left;
+    h.type = chance(0.12 + elapsed * 0.003) ? 'bomb' : chance(0.12) ? 'gold' : 'bot';
+    const ty = TYPES[h.type];
+    h.bot.bodyMat.color = ty.color; h.bot.headMat.color = ty.color; h.bot.eyeMat.emissive = ty.eye;
+    h.bot.spikes.visible = h.type === 'bomb';
+    h.bot.tip.material.emissive = h.type === 'bomb' ? '#ff4f5a' : h.type === 'gold' ? '#ffffff' : '#ff3fb0';
+    h.state = 'rising'; h.hit = false;
+    h.stay = Math.max(0.5, 1.25 - elapsed * 0.012) * (h.type === 'gold' ? 0.7 : 1);
+    this.audio.tone({ freq: h.type === 'bomb' ? 160 : 520, to: h.type === 'bomb' ? 120 : 760, dur: 0.1, type: 'triangle', vol: 0.06 });
+  }
+  whack(h) {
+    // swing the mallet at this hole
+    this.mallet.visible = true;
+    this.mallet.position.set(h.x + 0.9, 0.35, h.z + 0.3);
+    this.swing = 1;
+    if (h.state === 'up' || h.state === 'rising') {
+      if (h.hit) return;
+      h.hit = true; h.state = 'falling';
+      const ty = TYPES[h.type], top = { x: h.x, y: h.y + 0.6, z: h.z };
+      if (h.type === 'bomb') {
+        this.hearts--; this.combo = 0;
+        this.camera.shake(0.25, 0.4);
+        this.audio.sfx('explode');
+        this.particles.emit(top, { count: 50, speed: [2, 6], life: [0.4, 0.9], color: ['#ff4f5a', '#ffd23f', '#2a1015'], gravity: 6, size: [0.06, 0.16] });
+        this.floatText(top, '-♥', '#ff4f5a');
+        if (this.hearts <= 0) this.end();
+        return;
+      }
+      this.combo++;
+      const mult = 1 + Math.floor(this.combo / 5), pts = ty.pts * mult;
+      this.score += pts;
+      this.audio.tone({ freq: h.type === 'gold' ? 880 : 520 + Math.min(this.combo, 20) * 20, dur: 0.12, type: 'square', vol: 0.09 });
+      this.audio.noise({ dur: 0.06, vol: 0.12, freq: 1800 });
+      this.particles.emit(top, { count: 18, speed: [1.5, 4], life: [0.3, 0.6], color: [ty.color, '#ffffff'], gravity: 8, size: [0.05, 0.12] });
+      this.floatText(top, `+${pts}`, ty.color);
+    } else {
+      this.combo = 0;
+      this.audio.tone({ freq: 110, dur: 0.08, type: 'sine', vol: 0.15 });
+    }
+  }
+  floatText(p, s, color) { this.floating.push({ x: p.x, y: p.y, z: p.z, s, color, t: 0.9 }); }
+  end() {
+    this.state = 'over'; this.overAt = this.time;
+    this.audio.sfx(this.hearts > 0 ? 'win' : 'lose');
+    this.newBest = this.score > this.best;
+    if (this.newBest) { this.best = this.score; store.set('botbop:best', this.best); }
+  }
+  holeAtPointer() {
+    const p = this.input.pointer;
+    let best = null, bd = 1e9;
+    for (const h of this.holes) {
+      const c = this.toScreen({ x: h.x, y: h.state === 'down' ? 0.3 : h.y + 0.5, z: h.z }), e = this.toScreen({ x: h.x + 0.8, y: 0.3, z: h.z });
+      const d = Math.hypot(p.x - c.x, p.y - c.y), r = Math.abs(e.x - c.x) * 1.05;
+      if (d < r && d < bd) { bd = d; best = h; }
+    }
+    return best;
+  }
+  update(dt) {
+    const input = this.input;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    // robots rise and sink
+    for (const h of this.holes) {
+      const target = h.state === 'rising' || h.state === 'up' ? UP : DOWN;
+      h.y = damp(h.y, target, h.state === 'falling' ? 14 : 18, dt);
+      if (h.state === 'rising' && h.y > UP - 0.05) { h.state = 'up'; h.t = h.stay; }
+      if (h.state === 'up' && (h.t -= dt) <= 0) h.state = 'sinking';
+      if ((h.state === 'sinking' || h.state === 'falling') && h.y < DOWN + 0.05) { h.state = 'down'; h.type = null; }
+      h.bot.root.position.y = h.y;
+      h.bot.root.visible = h.y > DOWN + 0.03;
+      h.bot.root.rotation.y = h.state === 'up' ? Math.sin(this.time * 6 + h.i) * 0.25 : 0;
+      h.bot.root.scale.y = h.state === 'falling' ? 0.7 : 1;
+    }
+    this.swing = Math.max(0, this.swing - dt * 6);
+    this.malletArm.rotation.z = 0.3 + (1 - Math.abs(this.swing * 2 - 1)) * 1.1;
+    if (this.swing <= 0) this.mallet.visible = false;
+    if (this.floating) for (const f of this.floating) { f.t -= dt; f.y += dt * 1.2; }
+    if (this.floating) this.floating = this.floating.filter((f) => f.t > 0);
+
+    if (this.state !== 'play') {
+      if (this.state === 'title') { this.popT -= dt; if (this.popT <= 0) { this.popT = 0.7; const free = this.holes.filter((h) => h.state === 'down'); if (free.length) this.pop(pick(free)); } }
+      if (this.time > 0.4 && input.pressed('start') && (this.state === 'title' || this.time - this.overAt > 1)) this.start();
+      return;
+    }
+    this.left -= dt;
+    if (this.left <= 0) { this.left = 0; return this.end(); }
+    this.popT -= dt;
+    const up = this.holes.filter((h) => h.state !== 'down').length, maxUp = 1 + Math.floor((ROUND - this.left) / 15);
+    if (this.popT <= 0 && up < maxUp) {
+      this.popT = Math.max(0.3, 0.85 - (ROUND - this.left) * 0.009) * rand(0.7, 1.3);
+      const free = this.holes.filter((h) => h.state === 'down');
+      if (free.length) this.pop(pick(free));
+    }
+    for (let i = 0; i < 9; i++) if (input.pressed('hole' + i)) this.whack(this.holes[i]);
+    if (input.pointer.pressed) { const h = this.holeAtPointer(); if (h) this.whack(h); }
+  }
+  drawUI(ctx) {
+    const W = this.width, H = this.height, big = Math.min(W, H);
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ align: 'center', color: '#ffffff', shadow: 'rgba(0,0,0,.6)', shadowOffset: 2, font: 'system-ui, -apple-system, "Segoe UI", sans-serif', weight: '800' }, o));
+    if (this.floating) for (const f of this.floating) { const s = this.toScreen(f); if (s.visible) t(f.s, s.x, s.y, { size: Math.max(16, big * 0.045), color: f.color, alpha: Math.min(1, f.t * 2) }); }
+    if (!this.input.touchActive && this.state === 'play') for (const h of this.holes) { const s = this.toScreen({ x: h.x, y: 0.31, z: h.z + 0.7 }); t(LABELS[h.i], s.x, s.y, { size: 12, color: 'rgba(255,255,255,.35)', weight: '700' }); }
+    if (this.state === 'title') {
+      t('BOT BOP', W / 2, H * 0.06, { size: big * 0.11, color: '#ffd23f' });
+      t('bop the bots · gold ones are worth 3 · never bop the red ones', W / 2, H * 0.06 + big * 0.13, { size: Math.max(12, big * 0.03), weight: '600' });
+      t('click or tap a bot, or use Q W E / A S D / Z X C', W / 2, H * 0.06 + big * 0.18, { size: Math.max(11, big * 0.026), weight: '500', color: '#c8d0f0' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to start', W / 2, H * 0.88, { size: Math.max(14, big * 0.036) });
+      if (this.best) t(`best ${this.best}`, W / 2, H * 0.88 + big * 0.055, { size: Math.max(12, big * 0.03), weight: '600', color: '#8dffa8' });
+      return;
+    }
+    t(String(this.score), W / 2, 14, { size: Math.max(28, big * 0.08) });
+    t('♥'.repeat(Math.max(0, this.hearts)) + '♡'.repeat(3 - Math.max(0, this.hearts)), 18, 18, { align: 'left', size: 24, color: '#ff4f5a' });
+    const frac = this.left / ROUND, bw = Math.min(260, W * 0.5);
+    ctx.fillStyle = 'rgba(255,255,255,.15)'; ctx.fillRect(W / 2 - bw / 2, 14 + Math.max(28, big * 0.08) + 6, bw, 6);
+    ctx.fillStyle = frac < 0.2 ? '#ff4f5a' : '#8dffa8'; ctx.fillRect(W / 2 - bw / 2, 14 + Math.max(28, big * 0.08) + 6, bw * frac, 6);
+    if (this.combo >= 5) t(`COMBO ×${1 + Math.floor(this.combo / 5)}`, W - 18, 18, { align: 'right', size: 18, color: '#ffd23f' });
+    if (this.state === 'over') {
+      ctx.fillStyle = 'rgba(16,19,31,.7)'; ctx.fillRect(0, H * 0.36, W, H * 0.28);
+      t(this.hearts > 0 ? "TIME'S UP" : 'KABOOM', W / 2, H * 0.39, { size: big * 0.08, color: this.hearts > 0 ? '#ffd23f' : '#ff4f5a' });
+      t(`score ${this.score}${this.newBest ? '  · new best!' : `   best ${this.best}`}`, W / 2, H * 0.39 + big * 0.1, { size: Math.max(14, big * 0.035), weight: '600' });
+      if (this.time - this.overAt > 1) t('Space or tap to play again', W / 2, H * 0.39 + big * 0.16, { size: Math.max(13, big * 0.03), weight: '600', color: '#c8d0f0' });
+    }
+  }
+}
+
+game.start(new Bop());
+window.botBop = game;
+</script>
+</body>
+</html>

@@ -32,6 +32,38 @@ Roll a glowing orb down a neon highway toward a synthwave sunset. It keeps getti
 - Purple walls must be dodged. Orange walls are low enough to jump. Gems are worth 10 points each
 - Your best score is saved
 
+### Stack Tower
+Open [`stack-tower/index.html`](stack-tower/index.html). A 3D game built with Flint3D.
+
+A block slides back and forth above your tower. Drop it (Space, click or tap) so it lands on the block below. Any overhang gets sliced off and falls away, so your blocks keep shrinking. Land three perfect drops in a row and the block starts growing back. Your best height is saved.
+
+### Bot Bop
+Open [`bot-bop/index.html`](bot-bop/index.html). A 3D game built with Flint3D.
+
+Robots pop out of nine pipes. Bop them with the mallet before they duck back down. You have 60 seconds.
+
+- **Bop:** click or tap a bot, or use the keys that match the grid: Q W E / A S D / Z X C (or the number pad)
+- Blue bots are worth 1 point and gold bots 3. **Never bop the red, spiky ones:** each one costs a heart, and you have three
+- Five hits in a row starts a combo multiplier. Missing, or hitting an empty pipe, resets it
+
+### Star Sweeper
+Open [`star-sweeper/index.html`](star-sweeper/index.html). Built with Flint.
+
+A neon arena shooter. Your ship fires automatically, at the mouse if you're using one and otherwise at the nearest enemy.
+
+- **Move:** WASD or arrows, or drag on a touch screen. **Bomb:** X (clears the screen, +1 bomb per wave). **Pause:** P or Esc
+- Enemies: drifters chase you, dashers flash a line before they charge, rocks split in two, and gunners shoot back from a distance
+- Collect the green gems that enemies drop to raise your score multiplier, up to ×5. Getting hit resets it. **T** gives triple shot and **S** gives a shield
+
+### Prism Breaker
+Open [`prism-breaker/index.html`](prism-breaker/index.html). Built with Flint.
+
+A brick breaker with five levels. They loop, getting faster each time.
+
+- **Move:** ←/→ or the mouse, or drag on touch. **Launch:** Space or tap. **Pause:** P
+- Silver bricks take two hits, dark steel ones can't be broken (except by explosions), and ✸ bricks blow up their neighbors
+- Capsules: **W** wide paddle, **M** multiball, **S** slow ball, **L** extra life. Break bricks without touching the paddle to build a combo
+
 ### Sparkwood
 Open [`sparkwood/index.html`](sparkwood/index.html) in a browser. It's built with Flint and works offline.
 

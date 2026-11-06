@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Stack Tower</title>
+<style>html, body { margin: 0; height: 100%; background: #1b1530; overflow: hidden; }</style>
+</head>
+<body>
+<script src="../flint/flint.js"></script>
+<script src="../flint/flint3d.js"></script>
+<script>
+'use strict';
+// Stack Tower: drop sliding blocks to build as high as you can. Built with Flint3D.
+const { Game3D, Scene3D, Geometry, Material, mesh } = Flint3D;
+const { text, store, rand, damp, clamp } = Flint;
+
+const game = new Game3D({ touchButtons: [] });
+game.input.bind('drop', ['Space', 'Enter', 'ArrowDown', 'KeyS', 'PadA', 'Pointer']);
+
+const BH = 0.4, BASE = 3, CUBE = Geometry.box(1, 1, 1);
+const hsl = (h, s, l) => {
+  const k = (n) => (n + h * 12) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [f(0), f(8), f(4)];
+};
+
+class Stack extends Scene3D {
+  enter() {
+    Object.assign(this.env, { fog: null, sky: '#b9b3dd', ground: '#4a3e66', sunDir: [-0.55, -1, -0.35], sunIntensity: 0.85 });
+    this.camera.fov = 40;
+    this.best = store.get('stacktower:best', 0);
+    this.camY = 0; this.camDist = 11; this.spin = 0.8;
+    this.build();
+    this.state = 'title';
+  }
+  build() {
+    this.root.children.slice().forEach((n) => n.destroy());
+    this.particles.clear();
+    this.hue0 = rand(0, 1);
+    this.blocks = []; this.debris = [];
+    this.score = 0; this.streak = 0; this.cur = null; this.flash = 0; this.perfectText = 0;
+    this.add(mesh(CUBE, { color: hsl(this.hue0, 0.35, 0.3) }, { position: [0, -4.2, 0], scale: [BASE, 8, BASE] }));
+    this.blocks.push(this.makeBlock(0, 0, BASE, BASE, 0));
+  }
+  colorFor(level) { return hsl((this.hue0 + level * 0.03) % 1, 0.65, 0.58); }
+  makeBlock(x, z, sx, sz, level) {
+    const node = this.add(mesh(CUBE, { color: this.colorFor(level) }, { position: [x, level * BH, z], scale: [sx, BH, sz] }));
+    return { x, z, sx, sz, level, node };
+  }
+  get top() { return this.blocks[this.blocks.length - 1]; }
+  spawnNext() {
+    const p = this.top, level = p.level + 1, axis = level % 2 ? 'x' : 'z';
+    const b = this.makeBlock(p.x, p.z, p.sx, p.sz, level);
+    const from = this.score % 4 < 2 ? -1 : 1;
+    b[axis] = p[axis] + from * 4.5;
+    Object.assign(b, { axis, dir: -from, speed: Math.min(3.2 + level * 0.09, 8) });
+    this.cur = b;
+    this.sync(b);
+  }
+  sync(b) { b.node.position.set(b.x, b.level * BH, b.z); b.node.scale.set(b.sx, BH, b.sz); }
+  start() {
+    this.build();
+    this.state = 'play';
+    this.spawnNext();
+    this.audio.sfx('select');
+  }
+  place() {
+    const c = this.cur, p = this.top, ax = c.axis, sk = ax === 'x' ? 'sx' : 'sz';
+    const delta = c[ax] - p[ax], overlap = p[sk] - Math.abs(delta);
+    this.cur = null;
+    if (overlap <= 0) {
+      this.addDebris(c.node, c.x, c.z, c.sx, c.sz, c.level, Math.sign(delta));
+      return this.gameOver();
+    }
+    if (Math.abs(delta) < 0.09) {
+      c[ax] = p[ax];
+      this.streak++;
+      if (this.streak >= 3) c[sk] = Math.min(BASE, c[sk] + 0.12);
+      this.perfectText = 1;
+      this.audio.tone({ freq: 392 * Math.pow(2, Math.min(this.streak, 14) / 12), dur: 0.25, type: 'triangle', vol: 0.18 });
+      const y = c.level * BH;
+      for (const [dx, dz] of [[1, 1], [-1, 1], [1, -1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]])
+        this.particles.emit({ x: c.x + (dx * c.sx) / 2, y, z: c.z + (dz * c.sz) / 2 }, { count: 3, speed: [0.5, 1.5], life: [0.4, 0.7], color: ['#ffffff', '#ffe36b'], size: [0.05, 0.1] });
+    } else {
+      this.streak = 0;
+      const cut = Math.abs(delta), keep = overlap, s = Math.sign(delta);
+      c[sk] = keep; c[ax] = p[ax] + delta / 2;
+      const d = { x: c.x, z: c.z, sx: c.sx, sz: c.sz };
+      d[ax] = c[ax] + s * (keep / 2 + cut / 2); d[sk] = cut;
+      const n = this.add(mesh(CUBE, { color: this.colorFor(c.level) }));
+      this.addDebris(n, d.x, d.z, d.sx, d.sz, c.level, s);
+      this.audio.tone({ freq: 220, dur: 0.12, type: 'square', vol: 0.08 });
+      this.audio.noise({ dur: 0.08, vol: 0.08, freq: 900 });
+    }
+    this.sync(c);
+    this.blocks.push(c);
+    this.score++;
+    this.spawnNext();
+  }
+  addDebris(node, x, z, sx, sz, level, s) {
+    node.position.set(x, level * BH, z); node.scale.set(sx, BH, sz);
+    this.debris.push({ node, vy: 0, rx: rand(-2, 2) * (s || 1), rz: rand(-2, 2) });
+  }
+  gameOver() {
+    this.state = 'over'; this.overAt = this.time;
+    this.audio.sfx('lose');
+    this.newBest = this.score > this.best;
+    if (this.newBest) { this.best = this.score; store.set('stacktower:best', this.best); }
+  }
+  update(dt) {
+    const input = this.input;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.state === 'play') {
+      const c = this.cur, p = this.top;
+      c[c.axis] += c.dir * c.speed * dt;
+      if (c[c.axis] > p[c.axis] + 4.5) c.dir = -1;
+      if (c[c.axis] < p[c.axis] - 4.5) c.dir = 1;
+      this.sync(c);
+      if (input.pressed('drop')) this.place();
+    } else if (this.time > 0.4 && input.pressed('drop') && (this.state === 'title' || this.time - this.overAt > 0.8)) this.start();
+
+    for (const d of this.debris) {
+      d.vy -= 18 * dt;
+      d.node.position.y += d.vy * dt;
+      d.node.rotation.x += d.rx * dt; d.node.rotation.z += d.rz * dt;
+      if (d.node.position.y < -30) { d.node.destroy(); d.dead = true; }
+    }
+    this.debris = this.debris.filter((d) => !d.dead);
+    this.perfectText = Math.max(0, this.perfectText - dt * 1.2);
+
+    // camera: follow the top, pull back to show the whole tower when it's over
+    const h = this.top.level * BH;
+    const over = this.state === 'over';
+    this.camY = damp(this.camY, over ? h / 2 : h, 3, dt);
+    this.camDist = damp(this.camDist, over ? Math.max(11, h * 2.2 + 6) : 11, 2, dt);
+    if (this.state !== 'play') this.spin += dt * 0.25;
+    else this.spin = damp(this.spin, Math.PI / 4, 3, dt);
+    const cam = this.camera, k = this.camDist / Math.SQRT2;
+    cam.position.set(Math.sin(this.spin) * k * 1.41, this.camY + this.camDist * 0.62, Math.cos(this.spin) * k * 1.41);
+    cam.lookAt(0, this.camY - 0.3, 0);
+    const bg = hsl((this.hue0 + this.score * 0.03 + 0.5) % 1, 0.35, 0.16);
+    this.env.background = bg;
+  }
+  drawUI(ctx) {
+    const W = this.width, H = this.height, big = Math.min(W, H);
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ align: 'center', color: '#ffffff', shadow: 'rgba(0,0,0,.4)', shadowOffset: 2, font: 'system-ui, -apple-system, "Segoe UI", sans-serif', weight: '700' }, o));
+    if (this.state === 'title') {
+      t('STACK TOWER', W / 2, H * 0.12, { size: big * 0.1 });
+      t('drop each block right on top of the last', W / 2, H * 0.12 + big * 0.13, { size: Math.max(13, big * 0.032), weight: '500' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to start', W / 2, H * 0.84, { size: Math.max(14, big * 0.036) });
+      if (this.best) t(`best ${this.best}`, W / 2, H * 0.84 + big * 0.06, { size: Math.max(12, big * 0.03), weight: '500' });
+      return;
+    }
+    t(String(this.score), W / 2, H * 0.08, { size: big * 0.12 });
+    if (this.perfectText > 0) t(this.streak >= 3 ? `PERFECT ×${this.streak}` : 'PERFECT', W / 2, H * 0.08 + big * 0.15, { size: Math.max(14, big * 0.04), color: '#ffe36b', alpha: this.perfectText });
+    if (this.state === 'over') {
+      t(this.newBest ? 'NEW BEST!' : `best ${this.best}`, W / 2, H * 0.08 + big * 0.15, { size: Math.max(16, big * 0.045), color: '#ffe36b' });
+      if (this.time - this.overAt > 0.8) t('Space or tap to build again', W / 2, H * 0.86, { size: Math.max(14, big * 0.035) });
+    }
+  }
+}
+
+game.start(new Stack());
+window.stackTower = game;
+</script>
+</body>
+</html>

@@ -33,10 +33,10 @@ Full chess against a computer opponent, pass-and-play with a friend on one devic
 
 | Type | Goal |
 |---|---|
-| Mate in 1 (19) | Deliver checkmate in one move |
-| Mate in 2 (23) | Force checkmate in two moves, whatever your opponent does |
-| Mate in 3 (52) | Force checkmate in three moves |
-| Win material (83) | Find the fork, pin or skewer that wins a piece |
+| Mate in 1 (52) | Deliver checkmate in one move |
+| Mate in 2 (48) | Force checkmate in two moves, whatever your opponent does |
+| Mate in 3 (87) | Force checkmate in three moves |
+| Win material (265) | Find the fork, pin or skewer that wins a piece |
 | Mixed | A random unsolved puzzle from any type |
 
 A wrong move flashes red and you can try again. When you play a correct move, the opponent replies automatically. 💡 Hint first shows which piece to move, and pressing it again shows the move itself. Solving a puzzle with no mistakes or hints adds to your streak. Your solved puzzles and best streak are saved. Every puzzle was checked by computer: mates are proven to be forced, with only one correct first move, and each Win material puzzle has a single move that clearly wins.

@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sparkwood</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0a14; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="../flint/flint.js"></script>
+<script>
+'use strict';
+// Sparkwood: a small platformer built with the Flint engine.
+const { Game, Scene, Entity, Tilemap, SpriteSheet, Animator, Collide, pixelArt, text, store, approach, damp, clamp, rand, lerp } = Flint;
+
+const game = new Game({ canvas: '#game', width: 320, height: 180, pixelArt: true, background: '#000', letterbox: '#0d0a14', touchButtons: ['left', 'right', 'a'] });
+game.input.bind('jump', ['Space', 'KeyZ', 'KeyK', 'ArrowUp', 'KeyW', 'PadA', 'PadB', 'TouchA']);
+game.input.bind('mute', ['KeyM']);
+
+// ───────────── Art ─────────────
+const PAL = { k: '#2b1d2e', o: '#ff8a3d', y: '#ffd36b', e: '#2b1d2e', r: '#e8505b', g: '#6cc070', G: '#b6f09c', w: '#fff4e0', p: '#8b5cc8', d: '#4a3550' };
+
+const BODY = [
+  '.kooyyyyook.',
+  '.kooooooook.',
+  'koooeoooeook',
+  'koooeoooeook',
+  'kroooooooork',
+  '.kooooooook.',
+  '..kkkkkkkk..',
+];
+const TIP_A = ['....kk......', '...kyk......', '...kyyk.kk..', '..kyyykkyk..'];
+const TIP_B = ['......kk....', '......kyk...', '..kk.kyyk...', '..kykkyyyk..'];
+const EMPTY = '............';
+const wick = (tip, feet, bob) => bob ? [EMPTY, ...tip, ...BODY.slice(0, 6), '..kkkkkkkk..'] : [...tip, ...BODY, feet];
+const PLAYER = SpriteSheet.fromPixelArt([
+  wick(TIP_A, '..kk....kk..'),          // 0 idle
+  wick(TIP_B, '..kk....kk..'),          // 1 idle
+  wick(TIP_A, '.kk.....kk..'),          // 2 run
+  wick(TIP_B, '', true),                // 3 run
+  wick(TIP_B, '...kk..kk...'),          // 4 run
+  wick(TIP_A, '', true),                // 5 run
+  wick(TIP_A, '...k....k...'),          // 6 jump
+  wick(TIP_B, '.k........k.'),          // 7 fall
+], PAL);
+
+const SLIME = SpriteSheet.fromPixelArt([
+  ['............', '...kkkkkk...', '..kgggggGk..', '.kgggggggGk.', '.kgwkggwkgk.', 'kggggggggggk', 'kggggggggggk', '.kkkkkkkkkk.'],
+  ['............', '............', '...kkkkkk...', '.kkgggggGkk.', 'kgwkgggwkggk', 'kggggggggggk', 'kggggggggggk', '.kkkkkkkkkk.'],
+], PAL);
+
+const BAT = SpriteSheet.fromPixelArt([
+  ['k..........k', 'kk........kk', 'kpk.kkkk.kpk', 'kppkppppkppk', '.kppwppwppk.', '..kppppppk..', '...kpkkpk...', '....k..k....'],
+  ['............', '....kkkk....', '...kppppk...', '.kkpwppwpkk.', 'kppkppppkppk', 'kpk.kppk.kpk', 'kk...kk...kk', 'k..........k'],
+], PAL);
+
+const HEART = ['.kk.kk.', 'krrkrrk', 'krrrrrk', '.krrrk.', '..krk..', '...k...'];
+const HEART_FULL = pixelArt(HEART, PAL);
+const HEART_EMPTY = pixelArt(HEART.map((r) => r.replace(/r/g, 'd')), PAL);
+
+const THEMES = {
+  meadow: {
+    sky: ['#2a1f4d', '#a8507a', '#f2a65a'], far: '#5b3a6e', near: '#3b2a52',
+    dirt: '#5a3b2e', dirtDark: '#47302a', top: '#6cc070', topLight: '#b6f09c', plank: '#a8683a', spike: '#d8d0e0',
+  },
+  cave: {
+    sky: ['#0b0912', '#151225', '#1f1830'], far: '#221b33', near: '#17121f',
+    dirt: '#3a3550', dirtDark: '#2c2840', top: '#4fb3a9', topLight: '#9ff0e0', plank: '#7a5a8a', spike: '#c8c0d8',
+  },
+};
+
+const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+
+function makeLegend(t) {
+  return {
+    '#': {
+      solid: true,
+      draw(ctx, x, y, s, tx, ty, map) {
+        ctx.fillStyle = t.dirt; ctx.fillRect(x, y, s, s);
+        ctx.fillStyle = t.dirtDark;
+        const h = hash(tx, ty);
+        ctx.fillRect(x + ((h * 11) | 0) + 1, y + ((h * 97) % 11 | 0) + 3, 2, 2);
+        ctx.fillRect(x + ((h * 53) % 12 | 0) + 2, y + ((h * 31) % 9 | 0) + 6, 1, 1);
+        const open = (dx, dy) => { const c = map.get(tx + dx, ty + dy); return c !== null && c !== '#'; };
+        if (open(-1, 0)) ctx.fillRect(x, y, 1, s);
+        if (open(1, 0)) ctx.fillRect(x + s - 1, y, 1, s);
+        if (open(0, 1)) ctx.fillRect(x, y + s - 1, s, 1);
+        if (open(0, -1)) {
+          ctx.fillStyle = t.top; ctx.fillRect(x, y, s, 4);
+          ctx.fillStyle = t.topLight; ctx.fillRect(x, y, s, 1);
+          ctx.fillStyle = t.top;
+          for (let i = 0; i < 3; i++) ctx.fillRect(x + ((hash(tx, ty + i) * 15) | 0), y + 4, 1, 1 + i % 2);
+        }
+      },
+    },
+    '=': {
+      oneWay: true,
+      draw(ctx, x, y, s) {
+        ctx.fillStyle = t.plank; ctx.fillRect(x, y, s, 5);
+        ctx.fillStyle = 'rgba(255,255,255,.25)'; ctx.fillRect(x, y, s, 1);
+        ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(x, y + 4, s, 1); ctx.fillRect(x + 7, y + 1, 1, 3);
+      },
+    },
+    '^': {
+      hazard: true,
+      draw(ctx, x, y, s) {
+        ctx.fillStyle = t.spike;
+        for (let i = 0; i < 4; i++) {
+          ctx.beginPath(); ctx.moveTo(x + i * 4, y + s); ctx.lineTo(x + i * 4 + 2, y + s - 7); ctx.lineTo(x + i * 4 + 4, y + s); ctx.fill();
+        }
+      },
+    },
+  };
+}
+
+// ───────────── Levels ─────────────
+// # ground  = one-way platform  ^ spikes  o spark  P start  C lantern (checkpoint)  s slime  b bat  F goal
+const LEVELS = [
+  {
+    name: 'Ember Meadow', theme: 'meadow',
+    rows: [
+      '....................................................................................................',
+      '....................................................................................................',
+      '....................................................................................................',
+      '....................................................................................................',
+      '....................................................................................................',
+      '..................................................b.................................................',
+      '.....................................................................ooo.............b..............',
+      '.....................................C...............................===...........ooo..............',
+      '....................ooo....ooo......#####.oo....o......o................................oo..........',
+      '..........................=====.....#####.##........s............===....................##..........',
+      '................s.................#######....##############....C...s.....s......^^...........F......',
+      '..P...ooo...########...........^^.#######....##############...######################################',
+      '####################...##################....##############...######################################',
+      '####################...##################....##############...######################################',
+    ],
+  },
+  {
+    name: 'Hollow Caves', theme: 'cave',
+    rows: [
+      '##############################################################################################################',
+      '.................................................####.........................................................',
+      '.................................................####.........................................................',
+      '.................................................####.........................................................',
+      '................................ooo.................b.............................................b...........',
+      '...............................===..........................................b..........o....o.................',
+      '..................oo..................................................b............##.===..===................',
+      '..................##.......===............................o...o.........oo.........##...........ooo..s....F...',
+      '........................C.........b.......oo.............===.===.......====......####.........################',
+      '...........oo..........###................==..C...^^..s...........C.s.........s..####.........################',
+      '..........====.....s...###............###....############........####################.........################',
+      '..P..oo.......############....s.....s.###....############........####################.........################',
+      '##########^^^^###########################^^^^############^^^^^^^^####################.^^^^^^^^################',
+      '#####################################################################################.########################',
+    ],
+  },
+];
+
+// ───────────── Entities ─────────────
+const GRAVITY = 950, MAX_FALL = 320, RUN = 95, JUMP = 305, COYOTE = 0.09, BUFFER = 0.12;
+
+class Player extends Entity {
+  constructor(x, y) {
+    super({ x, y, w: 8, h: 11, z: 10, tags: ['player'] });
+    this.facing = 1; this.coyote = 0; this.buffer = 0; this.invuln = 0;
+    this.sqx = 1; this.sqy = 1; this.frozen = false; this.dead = false;
+    this.anim = new Animator({
+      idle: { frames: [0, 1], fps: 3 }, run: { frames: [2, 3, 4, 5], fps: 12 },
+      jump: { frames: [6] }, fall: { frames: [7] },
+    });
+  }
+  update(dt) {
+    const s = this.scene, input = s.input;
+    this.invuln = Math.max(0, this.invuln - dt);
+    this.sqx = damp(this.sqx, 1, 14, dt); this.sqy = damp(this.sqy, 1, 14, dt);
+    if (this.dead) return;
+    const dir = this.frozen ? 0 : input.axis('left', 'right') || (Math.abs(input.stick.x) > 0.3 ? Math.sign(input.stick.x) : 0);
+    if (dir) this.facing = dir;
+    if (dir) this.vx = approach(this.vx, dir * RUN, (this.onGround ? 900 : 650) * dt);
+    else this.vx = approach(this.vx, 0, (this.onGround ? 1100 : 350) * dt);
+
+    this.coyote = this.onGround ? COYOTE : this.coyote - dt;
+    this.buffer = !this.frozen && input.pressed('jump') ? BUFFER : this.buffer - dt;
+    if (this.buffer > 0 && this.coyote > 0) {
+      this.vy = -JUMP; this.buffer = 0; this.coyote = 0;
+      this.sqx = 0.7; this.sqy = 1.3;
+      s.audio.sfx('jump');
+      s.particles.emit(this.cx, this.bottom, { count: 6, speed: [10, 40], angle: -Math.PI / 2, spread: 2.4, life: [0.2, 0.4], color: '#d8c8b0', size: [1, 2] });
+    }
+    if (input.released('jump') && this.vy < 0) this.vy *= 0.45;
+    this.dropThrough = !this.frozen && input.down('down');
+
+    this.vy = Math.min(this.vy + GRAVITY * dt, MAX_FALL);
+    const falling = this.vy, wasGround = this.onGround;
+    this.move(dt);
+    if (this.onGround && !wasGround && falling > 160) {
+      this.sqx = 1.3; this.sqy = 0.75;
+      s.audio.sfx('land');
+      s.particles.emit(this.cx, this.bottom, { count: 8, speed: [15, 45], angle: -Math.PI / 2, spread: 3, life: [0.2, 0.4], color: '#d8c8b0', size: [1, 2] });
+    }
+
+    this.anim.play(!this.onGround ? (this.vy < 0 ? 'jump' : 'fall') : Math.abs(this.vx) > 8 ? 'run' : 'idle');
+    this.anim.update(dt);
+  }
+  draw(ctx) {
+    if (this.invuln > 0 && Math.floor(this.invuln * 12) % 2 === 0) return;
+    if (this.dead) return;
+    PLAYER.draw(ctx, this.anim.frame, Math.round(this.cx), Math.round(this.bottom), { ox: 6, oy: 12, flipX: this.facing < 0, scaleX: this.sqx, scaleY: this.sqy });
+  }
+}
+
+class Spark extends Entity {
+  constructor(x, y) { super({ x: x - 4, y: y - 4, w: 8, h: 8, z: 5, tags: ['spark'] }); this.phase = rand(0, 6); }
+  update(dt) { this.phase += dt * 3; }
+  draw(ctx) {
+    const x = this.cx, y = this.cy + Math.sin(this.phase) * 1.5, pulse = 0.5 + Math.sin(this.phase * 1.7) * 0.15;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `rgba(255,190,90,${pulse * 0.22})`;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = '#ffd36b';
+    ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x + 3, y); ctx.lineTo(x, y + 4); ctx.lineTo(x - 3, y); ctx.fill();
+    ctx.fillStyle = '#fff4e0'; ctx.fillRect(x - 1, y - 1, 1, 2);
+  }
+}
+
+class Slime extends Entity {
+  constructor(x, y) {
+    super({ x: x + 2, y: y + 9, w: 12, h: 7, z: 6, tags: ['enemy'] });
+    this.vx = -22; this.anim = new Animator({ crawl: { frames: [0, 1], fps: 4 } });
+  }
+  update(dt) {
+    const map = this.scene.map;
+    this.vy = Math.min(this.vy + GRAVITY * dt, MAX_FALL);
+    const dir = Math.sign(this.vx) || -1;
+    const hit = this.move(dt);
+    // turn around at walls and ledges
+    const aheadX = dir > 0 ? this.right + 1 : this.left - 1;
+    const t = map.toTile(aheadX, this.bottom + 2);
+    const floorAhead = map.isSolid(t.tx, t.ty) || map.isOneWay(t.tx, t.ty);
+    if (hit.left || hit.right || (this.onGround && !floorAhead)) this.vx = -dir * 22;
+    else this.vx = dir * 22;
+    this.anim.update(dt);
+  }
+  draw(ctx) { SLIME.draw(ctx, this.anim.frame, Math.round(this.x), Math.round(this.y - 1), { flipX: this.vx > 0 }); }
+}
+
+class Bat extends Entity {
+  constructor(x, y) {
+    super({ x: x + 2, y: y + 4, w: 12, h: 8, z: 7, tags: ['enemy'] });
+    this.baseX = this.x; this.baseY = this.y; this.t = rand(0, 6);
+    this.anim = new Animator({ flap: { frames: [0, 1], fps: 6 } });
+  }
+  update(dt) {
+    this.t += dt;
+    const px = this.x;
+    this.x = this.baseX + Math.sin(this.t * 0.9) * 36;
+    this.y = this.baseY + Math.sin(this.t * 2.6) * 9;
+    this.facing = this.x > px ? 1 : -1;
+    this.anim.update(dt);
+  }
+  draw(ctx) { BAT.draw(ctx, this.anim.frame, Math.round(this.x), Math.round(this.y), { flipX: this.facing < 0 }); }
+}
+
+class Lantern extends Entity {
+  constructor(x, y) { super({ x: x + 4, y: y - 8, w: 8, h: 24, z: 2, tags: ['checkpoint'] }); this.lit = false; this.t = 0; }
+  update(dt) { this.t += dt; }
+  draw(ctx) {
+    const x = Math.round(this.x), y = Math.round(this.y);
+    ctx.fillStyle = '#2b1d2e'; ctx.fillRect(x + 3, y + 6, 2, 18); ctx.fillRect(x + 1, y + 22, 6, 2);
+    ctx.fillStyle = this.lit ? '#ffd36b' : '#5a4a60'; ctx.fillRect(x + 1, y, 6, 7);
+    ctx.fillStyle = '#2b1d2e'; ctx.fillRect(x + 1, y, 6, 1); ctx.fillRect(x + 1, y + 6, 6, 1);
+    if (this.lit) {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(255,180,80,${0.18 + Math.sin(this.t * 5) * 0.04})`;
+      ctx.beginPath(); ctx.arc(x + 4, y + 3, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+  }
+}
+
+class Goal extends Entity {
+  constructor(x, y) { super({ x: x + 2, y: y - 24, w: 12, h: 40, z: 1, tags: ['goal'] }); this.t = 0; }
+  update(dt) { this.t += dt; }
+  draw(ctx) {
+    const x = Math.round(this.x), y = Math.round(this.y);
+    ctx.fillStyle = '#e8e0f0'; ctx.fillRect(x + 1, y, 2, 40);
+    ctx.fillStyle = '#ff8a3d';
+    for (let i = 0; i < 10; i++) {
+      const wave = Math.sin(this.t * 6 - i * 0.6) * 1.5;
+      ctx.fillRect(x + 3 + i, Math.round(y + 2 + wave + i * 0.3), 1, 9 - i * 0.6);
+    }
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255,170,80,.15)'; ctx.beginPath(); ctx.arc(x + 6, y + 8, 14, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ───────────── Shared drawing ─────────────
+function drawBackdrop(ctx, scene, theme, camX) {
+  const W = scene.width, H = scene.height;
+  if (!theme._grad) {
+    theme._grad = ctx.createLinearGradient(0, 0, 0, H);
+    theme.sky.forEach((c, i) => theme._grad.addColorStop(i / (theme.sky.length - 1), c));
+  }
+  ctx.fillStyle = theme._grad; ctx.fillRect(0, 0, W, H);
+  if (theme === THEMES.meadow) {
+    ctx.fillStyle = 'rgba(255,220,150,.9)'; ctx.beginPath(); ctx.arc(W * 0.72, H * 0.5, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,200,140,.15)'; ctx.beginPath(); ctx.arc(W * 0.72, H * 0.5, 34, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.fillStyle = 'rgba(160,140,255,.5)';
+    for (let i = 0; i < 40; i++) {
+      const x = (((hash(i, 1) * 900 - camX * 0.1) % W) + W) % W, y = hash(i, 2) * H * 0.8;
+      ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
+    }
+  }
+  const layer = (color, parallax, base, amp, freq, jag) => {
+    ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x <= W + 4; x += 4) {
+      const wx = x + camX * parallax;
+      const y = base + Math.sin(wx * freq) * amp + Math.sin(wx * freq * 2.7 + 1) * amp * 0.4 + (jag ? (hash(Math.floor(wx / 4), 9) - 0.5) * jag : 0);
+      ctx.lineTo(x, Math.round(y));
+    }
+    ctx.lineTo(W, H); ctx.fill();
+  };
+  layer(theme.far, 0.2, H * 0.62, 12, 0.012, theme === THEMES.cave ? 6 : 0);
+  layer(theme.near, 0.45, H * 0.76, 10, 0.02, theme === THEMES.cave ? 8 : 0);
+}
+
+function centered(ctx, s, y, size, color, alpha) {
+  text(ctx, s, 160, y, { size, color: color || '#fff4e0', align: 'center', shadow: '#2b1d2e', alpha });
+}
+
+const fmtTime = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}.${Math.floor((t % 1) * 10)}`;
+
+// ───────────── Scenes ─────────────
+class LevelScene extends Scene {
+  constructor(run) { super(); this.run = run; }
+  enter() {
+    const L = LEVELS[this.run.level];
+    this.level = L; this.theme = THEMES[L.theme];
+    this.map = new Tilemap({ rows: L.rows, tileSize: 16, legend: makeLegend(this.theme) });
+    this.run.levelStart = { sparks: this.run.sparks, time: this.run.time, deaths: this.run.deaths };
+    const start = this.map.take('P')[0];
+    this.spawn = { x: start.x + 4, y: start.y + 5 };
+    this.player = this.add(new Player(this.spawn.x, this.spawn.y));
+    for (const t of this.map.take('o')) this.add(new Spark(t.x + 8, t.y + 8));
+    for (const t of this.map.take('s')) this.add(new Slime(t.x, t.y));
+    for (const t of this.map.take('b')) this.add(new Bat(t.x, t.y));
+    for (const t of this.map.take('C')) this.add(new Lantern(t.x, t.y));
+    for (const t of this.map.take('F')) this.add(new Goal(t.x, t.y));
+    this.totalSparks = this.world.query('spark').length;
+    this.collected = 0;
+    this.hp = 3; this.done = false;
+    this.camera.setBounds(0, 0, this.map.width, this.map.height).follow(this.player, { lerp: 7, offsetY: -8 });
+    this.banner = { a: 0 };
+    this.tweens.to(this.banner, { a: 1 }, 0.4, { delay: 0.3 });
+    this.tweens.to(this.banner, { a: 0 }, 0.6, { delay: 2.2 });
+    this.muteNote = 0;
+  }
+  blur() { if (!this.done) this.game.push(new PauseScene(this)); }
+  update(dt) {
+    const input = this.input, p = this.player;
+    if (input.pressed('mute')) { this.audio.toggleMute(); this.muteNote = 1.5; }
+    this.muteNote = Math.max(0, this.muteNote - dt);
+    const tappedPause = input.pointer.pressed && input.pointer.x > this.width - 28 && input.pointer.y < 24;
+    if ((input.pressed('pause') || tappedPause) && !this.done) { this.game.push(new PauseScene(this)); return; }
+    if (!this.done) this.run.time += dt;
+    this.camera.offsetX = damp(this.camera.offsetX, p.facing * 18, 2.5, dt);
+    if (p.dead || this.done) return;
+
+    // hazards
+    if (p.y > this.map.height + 24) return this.hurt(true);
+    const ts = this.map.tileSize; // spikes fill only the bottom part of their tile
+    if (this.map.tilesIn(Collide.inset(p, 1, 0)).some((t) => t.info && t.info.hazard && p.bottom > t.ty * ts + 10)) return this.hurt(true);
+
+    for (const e of this.world.overlapping(p, 'enemy')) {
+      if (p.vy > 40 && p.bottom - e.y < 7) {
+        this.squash(e);
+        p.vy = input.down('jump') ? -JUMP * 0.95 : -JUMP * 0.65;
+        p.sqx = 0.75; p.sqy = 1.25;
+      } else if (p.invuln <= 0) {
+        this.hurt(false, Math.sign(p.cx - e.cx) || 1);
+        break;
+      }
+    }
+    for (const s of this.world.overlapping(p, 'spark')) {
+      s.destroy(); this.collected++; this.run.sparks++;
+      this.audio.sfx('coin');
+      this.particles.emit(s.cx, s.cy, { count: 10, speed: [20, 60], life: [0.25, 0.5], color: ['#ffd36b', '#ff8a3d', '#fff4e0'], size: [1, 2.5], blend: 'lighter' });
+    }
+    for (const c of this.world.overlapping(p, 'checkpoint')) {
+      if (c.lit) continue;
+      c.lit = true; this.spawn = { x: c.x, y: c.bottom - p.h };
+      this.audio.sfx('select');
+      this.particles.emit(c.x + 4, c.y + 3, { count: 18, speed: [20, 70], life: [0.4, 0.8], color: ['#ffd36b', '#ff8a3d'], blend: 'lighter', gravity: -40 });
+    }
+    if (this.world.overlapping(p, 'goal').length) this.finish();
+  }
+  squash(e) {
+    e.destroy();
+    this.audio.sfx('hit');
+    this.camera.shake(2, 0.15);
+    const colors = e instanceof Bat ? ['#8b5cc8', '#2b1d2e'] : ['#6cc070', '#b6f09c'];
+    this.particles.emit(e.cx, e.cy, { count: 16, speed: [30, 90], life: [0.3, 0.6], color: colors, gravity: 300, size: [1, 3] });
+  }
+  hurt(respawn, knock = 0) {
+    const p = this.player;
+    if (!respawn && p.invuln > 0) return;
+    this.hp--; this.run.deaths += respawn ? 1 : 0;
+    this.audio.sfx('hurt');
+    this.camera.shake(5, 0.35);
+    this.particles.emit(p.cx, p.cy, { count: 20, speed: [30, 100], life: [0.3, 0.7], color: ['#ff8a3d', '#ffd36b', '#e8505b'], blend: 'lighter' });
+    if (this.hp <= 0) {
+      p.dead = true; p.vx = p.vy = 0;
+      this.audio.sfx('lose');
+      this.timers.after(1.3, () => this.game.switch(new GameOverScene(this.run), { fade: 0.8 }));
+      return;
+    }
+    p.invuln = 1.4;
+    if (respawn) {
+      p.x = this.spawn.x; p.y = this.spawn.y; p.vx = p.vy = 0; p.snap();
+    } else {
+      p.vx = knock * 140; p.vy = -180;
+    }
+  }
+  finish() {
+    this.done = true;
+    const p = this.player; p.frozen = true;
+    this.audio.sfx('win');
+    for (let i = 0; i < 4; i++) this.timers.after(i * 0.15, () => this.particles.emit(p.cx + rand(-20, 20), p.cy - rand(0, 30), { count: 24, speed: [20, 80], life: [0.5, 1], color: ['#ffd36b', '#ff8a3d', '#fff4e0', '#b6f09c'], blend: 'lighter', gravity: 60 }));
+    this.timers.after(1.8, () => {
+      this.run.level++;
+      this.game.switch(this.run.level < LEVELS.length ? new LevelScene(this.run) : new VictoryScene(this.run), { fade: 0.8 });
+    });
+  }
+  drawBackground(ctx) { drawBackdrop(ctx, this, this.theme, this.camera.x); }
+  drawWorld(ctx) {
+    // warm light around the player in the caves
+    if (this.theme === THEMES.cave && !this.player.dead) {
+      const p = this.player, g = ctx.createRadialGradient(p.cx, p.cy, 2, p.cx, p.cy, 60);
+      g.addColorStop(0, 'rgba(255,170,80,.22)'); g.addColorStop(1, 'rgba(255,170,80,0)');
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = g; ctx.fillRect(p.cx - 60, p.cy - 60, 120, 120); ctx.restore();
+    }
+  }
+  drawUI(ctx) {
+    for (let i = 0; i < 3; i++) ctx.drawImage(i < this.hp ? HEART_FULL : HEART_EMPTY, 6 + i * 9, 6);
+    text(ctx, `✦ ${this.collected}/${this.totalSparks}`, 36, 5, { size: 8, color: '#ffd36b', shadow: '#2b1d2e' });
+    text(ctx, fmtTime(this.run.time), this.width / 2, 5, { size: 8, align: 'center', color: '#fff4e0', shadow: '#2b1d2e' });
+    text(ctx, 'II', this.width - 10, 5, { size: 8, align: 'right', color: '#fff4e0', shadow: '#2b1d2e', alpha: 0.8 });
+    if (this.banner.a > 0.01) {
+      ctx.fillStyle = `rgba(13,10,20,${0.55 * this.banner.a})`; ctx.fillRect(0, 62, this.width, 34);
+      centered(ctx, `${this.run.level + 1} · ${this.level.name}`, 68, 12, '#ffd36b', this.banner.a);
+      centered(ctx, `collect sparks, light lanterns, reach the flag`, 84, 6, '#fff4e0', this.banner.a);
+    }
+    if (this.muteNote > 0) text(ctx, this.audio.muted ? 'sound off' : 'sound on', this.width - 10, 16, { size: 6, align: 'right', color: '#fff4e0', alpha: Math.min(1, this.muteNote) });
+  }
+}
+
+class PauseScene extends Scene {
+  constructor(level) { super(); this.level = level; this.transparent = true; this.showTouch = false; this.items = ['Resume', 'Restart level', 'Quit to title']; this.sel = 0; }
+  update() {
+    const input = this.input;
+    if (input.pressed('pause') || input.pressed('cancel')) return this.game.pop();
+    if (input.pressed('up')) { this.sel = (this.sel + this.items.length - 1) % this.items.length; this.audio.sfx('blip'); }
+    if (input.pressed('down')) { this.sel = (this.sel + 1) % this.items.length; this.audio.sfx('blip'); }
+    let choose = input.pressed('Enter') || input.pressed('Space') || input.pressed('PadA');
+    if (input.pointer.pressed) {
+      const i = Math.floor((input.pointer.y - 84) / 14);
+      if (i >= 0 && i < this.items.length && Math.abs(input.pointer.x - 160) < 60) { this.sel = i; choose = true; }
+    }
+    if (!choose) return;
+    this.audio.sfx('select');
+    const run = this.level.run;
+    if (this.sel === 0) this.game.pop();
+    else if (this.sel === 1) { Object.assign(run, run.levelStart); this.game.switch(new LevelScene(run), { fade: 0.5 }); }
+    else this.game.switch(new TitleScene(), { fade: 0.5 });
+  }
+  drawUI(ctx) {
+    ctx.fillStyle = 'rgba(13,10,20,.7)'; ctx.fillRect(0, 0, this.width, this.height);
+    centered(ctx, 'PAUSED', 56, 14, '#ffd36b');
+    this.items.forEach((it, i) => centered(ctx, (i === this.sel ? '› ' : '  ') + it + (i === this.sel ? ' ‹' : '  '), 86 + i * 14, 8, i === this.sel ? '#fff4e0' : '#9a8aa8'));
+    centered(ctx, 'Esc / P to resume   M to mute', 156, 6, '#9a8aa8');
+  }
+}
+
+class TitleScene extends Scene {
+  constructor() { super(); this.showTouch = false; }
+  enter() { this.best = store.get('sparkwood:best', null); this.camX = 0; }
+  update(dt) {
+    this.camX += dt * 20;
+    if (this.input.pressed('mute')) this.audio.toggleMute();
+    if (Math.random() < dt * 8) this.particles.emit(rand(0, this.width), this.height + 4, { count: 1, speed: [10, 25], angle: -Math.PI / 2, spread: 0.6, life: [3, 6], size: [1, 2.5], color: ['#ffd36b', '#ff8a3d'], blend: 'lighter', fade: true, shrink: false });
+    if (this.time > 0.3 && (this.input.pressed('confirm') || this.input.pressed('jump'))) {
+      this.audio.sfx('select');
+      this.game.switch(new LevelScene({ level: 0, sparks: 0, time: 0, deaths: 0 }), { fade: 0.8 });
+    }
+  }
+  drawBackground(ctx) { drawBackdrop(ctx, this, THEMES.meadow, this.camX); }
+  drawUI(ctx) {
+    const bob = Math.sin(this.time * 2) * 2;
+    centered(ctx, 'SPARKWOOD', 38 + bob, 24, '#ffd36b');
+    centered(ctx, 'a tiny platformer made with the Flint engine', 66, 6, '#fff4e0');
+    PLAYER.draw(ctx, Math.floor(this.time * 3) % 2, 160, 98, { ox: 6, oy: 12, scale: 2 });
+    if (Math.floor(this.time * 2) % 2 === 0) centered(ctx, 'press Enter or tap to start', 110, 8, '#fff4e0');
+    centered(ctx, '←/→ or A/D move   Space/Z/↑ jump   ↓ drop through   Esc pause', 136, 6, '#e8d8f0');
+    centered(ctx, 'stomp slimes and bats · spikes and pits cost a heart · M mute · ` debug', 146, 6, '#e8d8f0');
+    if (this.best) centered(ctx, `best: ${fmtTime(this.best.time)} with ${this.best.sparks} sparks`, 164, 6, '#ffd36b');
+  }
+}
+
+class GameOverScene extends Scene {
+  constructor(run) { super(); this.run = run; this.showTouch = false; }
+  update() {
+    if (this.time > 0.6 && (this.input.pressed('confirm') || this.input.pressed('jump'))) {
+      Object.assign(this.run, this.run.levelStart);
+      this.audio.sfx('select');
+      this.game.switch(new LevelScene(this.run), { fade: 0.6 });
+    }
+    if (this.input.pressed('cancel')) this.game.switch(new TitleScene(), { fade: 0.6 });
+  }
+  drawUI(ctx) {
+    ctx.fillStyle = '#0d0a14'; ctx.fillRect(0, 0, this.width, this.height);
+    centered(ctx, 'YOUR FLAME WENT OUT', 60, 14, '#e8505b');
+    centered(ctx, `level ${this.run.level + 1}: ${LEVELS[this.run.level].name}`, 86, 8, '#fff4e0');
+    if (this.time > 0.6) centered(ctx, 'Enter / tap to try again · Esc for title', 120, 7, '#9a8aa8');
+  }
+}
+
+class VictoryScene extends Scene {
+  constructor(run) { super(); this.run = run; this.showTouch = false; }
+  enter() {
+    const total = LEVELS.reduce((n, L) => n + L.rows.join('').split('o').length - 1, 0);
+    this.total = total;
+    const best = store.get('sparkwood:best', null);
+    this.newBest = !best || this.run.time < best.time;
+    if (this.newBest) store.set('sparkwood:best', { time: this.run.time, sparks: this.run.sparks });
+    this.timers.every(0.4, () => this.particles.emit(rand(40, 280), rand(30, 90), { count: 30, speed: [20, 90], life: [0.6, 1.2], color: ['#ffd36b', '#ff8a3d', '#b6f09c', '#8b5cc8'], blend: 'lighter', gravity: 50 }));
+  }
+  update() {
+    if (this.time > 1 && (this.input.pressed('confirm') || this.input.pressed('jump'))) this.game.switch(new TitleScene(), { fade: 0.6 });
+  }
+  drawBackground(ctx) { drawBackdrop(ctx, this, THEMES.meadow, this.time * 10); ctx.fillStyle = 'rgba(13,10,20,.45)'; ctx.fillRect(0, 0, this.width, this.height); }
+  drawUI(ctx) {
+    centered(ctx, 'THE WOOD IS LIT', 40, 18, '#ffd36b');
+    centered(ctx, `time ${fmtTime(this.run.time)}${this.newBest ? '  · new best!' : ''}`, 80, 8);
+    centered(ctx, `sparks ${this.run.sparks} / ${this.total}`, 94, 8);
+    centered(ctx, `falls ${this.run.deaths}`, 108, 8);
+    if (this.time > 1) centered(ctx, 'Enter / tap to return to the title', 140, 7, '#e8d8f0');
+  }
+}
+
+game.start(new TitleScene());
+window.sparkwood = { game, LevelScene, LEVELS }; // handy from the console
+</script>
+</body>
+</html>

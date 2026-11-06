@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flint Hello</title>
+</head>
+<body>
+<script src="../flint.js"></script>
+<script>
+// The smallest useful Flint game: move a square, collect coins, avoid nothing.
+const { Game, Scene, Entity, rand, text } = Flint;
+
+class Player extends Entity {
+  constructor() { super({ x: 150, y: 80, w: 12, h: 12, tags: ['player'] }); }
+  update(dt) {
+    const input = this.scene.input;
+    this.x += input.axis('left', 'right') * 120 * dt;
+    this.y += input.axis('up', 'down') * 120 * dt;
+  }
+  draw(ctx) { ctx.fillStyle = '#ffb347'; ctx.fillRect(this.x, this.y, this.w, this.h); }
+}
+
+class Coin extends Entity {
+  constructor() { super({ x: rand(10, 300), y: rand(20, 165), w: 6, h: 6, tags: ['coin'] }); }
+  draw(ctx) { ctx.fillStyle = '#ffe066'; ctx.fillRect(this.x, this.y, this.w, this.h); }
+}
+
+class Play extends Scene {
+  enter() {
+    this.score = 0;
+    this.player = this.add(new Player());
+    for (let i = 0; i < 5; i++) this.add(new Coin());
+  }
+  update() {
+    for (const c of this.world.overlapping(this.player, 'coin')) {
+      c.destroy();
+      this.score++;
+      this.audio.sfx('coin');
+      this.particles.emit(c.cx, c.cy, { color: '#ffe066' });
+      this.add(new Coin());
+    }
+  }
+  drawUI(ctx) { text(ctx, `score ${this.score}  (arrows / WASD)`, 6, 6, { size: 8 }); }
+}
+
+new Game({ width: 320, height: 180, background: '#1b1530' }).start(new Play());
+</script>
+</body>
+</html>

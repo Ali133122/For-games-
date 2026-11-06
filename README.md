@@ -1,7 +1,20 @@
 # For-games-
 A repo for games 
 
+## Flint game engine
+[`flint/flint.js`](flint/flint.js) is a tiny 2D game engine in one file with no dependencies. It covers scenes, entities, tilemaps with collision, a camera, keyboard/mouse/touch/gamepad input, sprites and animation, particles, tweens and synthesized sound. See the [Flint README](flint/README.md) for the guide and API, and [`flint/examples/hello.html`](flint/examples/hello.html) for a 40-line example.
+
 ## Games
+
+### Sparkwood
+Open [`sparkwood/index.html`](sparkwood/index.html) in a browser. It's built with Flint and works offline.
+
+A small two-level platformer. You play a little flame collecting sparks, lighting lantern checkpoints and racing to the flag.
+
+- **Move:** ←/→ or A/D. **Jump:** Space, Z or ↑ (hold for higher). **Drop through platforms:** ↓. **Pause:** Esc or P. **Mute:** M
+- Stomp slimes and bats. Spikes, pits and enemy hits each cost one of your three hearts
+- Works with a gamepad, and shows on-screen buttons on touch screens
+- Your best time is saved
 
 ### Royal Gambit
 Open [`royal-gambit/index.html`](royal-gambit/index.html) in a browser. It's one file with no dependencies, and it works offline.

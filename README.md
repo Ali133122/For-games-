@@ -3,6 +3,21 @@ A repo for games
 
 ## Games
 
+### Royal Gambit
+Open [`royal-gambit/index.html`](royal-gambit/index.html) in a browser. It's one file with no dependencies, and it works offline.
+
+Full chess against a computer opponent, or pass-and-play with a friend on one device.
+
+- **Five computer levels:** Pawn, Knight, Bishop, Rook and Queen. They range from a beginner who blunders to a full-strength engine that thinks several moves ahead. Beat a level and you're offered the next one.
+- **All the rules:** castling, en passant, promotion (you pick the piece), check, checkmate, stalemate, threefold repetition, the 50-move rule and insufficient material
+- **Moving pieces:** drag them, or click a piece and then a highlighted square
+- **Help:** 💡 Hint draws an arrow showing a strong move, and Undo takes back your last move
+- **Evaluation bar:** shows who's ahead (you can turn it off)
+- **Review:** click any move in the list, or use ← → to step through the game
+- **Extras:** four board colors, light and dark mode, sound effects, and your game is saved automatically if you close the tab
+
+Keyboard: <kbd>H</kbd> hint · <kbd>U</kbd> undo · <kbd>F</kbd> flip board · <kbd>←</kbd>/<kbd>→</kbd> step through moves
+
 ### Lantern Drift
 Open [`lantern-drift/index.html`](lantern-drift/index.html) in a browser. It's one file with no dependencies.
 

@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Drift Kart</title>
+<style>html, body { margin: 0; height: 100%; background: #7cc0e8; overflow: hidden; }</style>
+</head>
+<body>
+<script src="../flint/flint.js"></script>
+<script src="../flint/flint3d.js"></script>
+<script>
+'use strict';
+// Drift Kart: three laps against three rivals. Hold drift through corners for a boost. Built with Flint3D.
+const { Game3D, Scene3D, Geometry, Texture, Material, Node, mesh, Vec3 } = Flint3D;
+const { text, store, clamp, damp, rand, lerp } = Flint;
+
+const game = new Game3D({ touchButtons: ['left', 'right', 'b', 'a'] });
+const inp = game.input;
+inp.bind('gas', ['ArrowUp', 'KeyW', 'PadA', 'TouchA']);
+inp.bind('brake', ['ArrowDown', 'KeyS', 'PadX']);
+inp.bind('drift', ['Space', 'ShiftLeft', 'KeyX', 'PadR', 'PadB', 'TouchB']);
+inp.bind('go', ['Enter', 'Space', 'PadStart', 'PadA', 'Pointer']);
+
+const LAPS = 3, HW = 4.2;
+// ── the track: a closed Catmull-Rom loop through these points ──
+const CTRL = [[0, 40], [30, 38], [50, 18], [44, -6], [24, -14], [20, -36], [0, -46], [-26, -38], [-42, -14], [-30, 4], [-44, 24], [-22, 42]].map(([x, z]) => [x * 1.35, z * 1.35]);
+const TRACK = (() => {
+  const pts = [], n = CTRL.length;
+  for (let i = 0; i < n; i++) {
+    const p0 = CTRL[(i - 1 + n) % n], p1 = CTRL[i], p2 = CTRL[(i + 1) % n], p3 = CTRL[(i + 2) % n];
+    for (let k = 0; k < 16; k++) {
+      const t = k / 16, t2 = t * t, t3 = t2 * t;
+      const f = (a, b, c, d) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
+      pts.push({ x: f(p0[0], p1[0], p2[0], p3[0]), z: f(p0[1], p1[1], p2[1], p3[1]) });
+    }
+  }
+  let d = 0;
+  pts.forEach((p, i) => {
+    const a = pts[(i - 1 + pts.length) % pts.length], b = pts[(i + 1) % pts.length];
+    const tx = b.x - a.x, tz = b.z - a.z, l = Math.hypot(tx, tz);
+    p.tx = tx / l; p.tz = tz / l; p.nx = -p.tz; p.nz = p.tx;
+    if (i) d += Math.hypot(p.x - pts[i - 1].x, p.z - pts[i - 1].z);
+    p.d = d;
+  });
+  const total = d + Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].z - pts[pts.length - 1].z);
+  pts.forEach((p, i) => { const a = pts[(i - 4 + pts.length) % pts.length], b = pts[(i + 4) % pts.length]; p.curve = 1 - (a.tx * b.tx + a.tz * b.tz); });
+  return { pts, total };
+})();
+const N = TRACK.pts.length;
+window.TRACKPTS = TRACK.pts; // handy for testing
+function pointAt(s) {
+  s = ((s % TRACK.total) + TRACK.total) % TRACK.total;
+  let i = 0; while (i < N - 1 && TRACK.pts[i + 1].d <= s) i++;
+  const a = TRACK.pts[i], b = TRACK.pts[(i + 1) % N], seg = (i + 1 < N ? b.d : TRACK.total) - a.d, k = seg ? (s - a.d) / seg : 0;
+  return { x: lerp(a.x, b.x, k), z: lerp(a.z, b.z, k), tx: lerp(a.tx, b.tx, k), tz: lerp(a.tz, b.tz, k), nx: lerp(a.nx, b.nx, k), nz: lerp(a.nz, b.nz, k), curve: a.curve, i };
+}
+
+// ── art ──
+const roadTex = Texture.canvas(64, 64, (g, w, h) => {
+  g.fillStyle = '#4a4d55'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 160; i++) { g.fillStyle = Math.random() < 0.5 ? '#43464e' : '#52555d'; g.fillRect(Math.random() * w, Math.random() * h, 2, 2); }
+  g.fillStyle = '#e8e8e8'; g.fillRect(w / 2 - 1, 0, 2, h / 2);
+  g.fillRect(0, 0, 3, h); g.fillRect(w - 3, 0, 3, h);
+}, { repeat: true });
+function roadGeometry() {
+  const P = [], Nn = [], U = [], I = [];
+  for (let i = 0; i <= N; i++) {
+    const p = TRACK.pts[i % N], v = (i === N ? TRACK.total : p.d) / 8;
+    P.push(p.x + p.nx * HW, 0.02, p.z + p.nz * HW, p.x - p.nx * HW, 0.02, p.z - p.nz * HW);
+    Nn.push(0, 1, 0, 0, 1, 0); U.push(0, v, 1, v);
+  }
+  for (let i = 0; i < N; i++) { const a = i * 2, b = a + 1, c = a + 2, d = a + 3; I.push(a, c, b, b, c, d); }
+  const g = new Geometry(P, Nn, U, I);
+  // make sure the road faces up
+  const ax = P[0], az = P[2], bx = P[6], bz = P[8], cx = P[3], cz = P[5];
+  if ((bz - az) * (cx - ax) - (bx - ax) * (cz - az) < 0) for (let i = 0; i < g.indices.length; i += 3) { const t = g.indices[i + 1]; g.indices[i + 1] = g.indices[i + 2]; g.indices[i + 2] = t; }
+  return g;
+}
+function curbs(white) {
+  const parts = [];
+  TRACK.pts.forEach((p, i) => {
+    if (i % 2 !== (white ? 0 : 1)) return;
+    for (const side of [1, -1]) parts.push({ geometry: Geometry.box(0.7, 0.12, 1.5), position: [p.x + p.nx * (HW + 0.35) * side, 0.06, p.z + p.nz * (HW + 0.35) * side], rotation: [0, Math.atan2(p.tx, p.tz), 0] });
+  });
+  return Geometry.merge(parts);
+}
+function trees() {
+  const fol = [], trunk = [];
+  let tries = 0;
+  while (fol.length < 90 && tries++ < 3000) {
+    const x = rand(-105, 105), z = rand(-105, 105);
+    if (TRACK.pts.some((p) => Math.hypot(p.x - x, p.z - z) < HW + 5)) continue;
+    const s = rand(0.8, 1.6);
+    fol.push({ geometry: Geometry.cone(1.6 * s, 3.6 * s, 7), position: [x, 1.2 + 1.8 * s, z] });
+    trunk.push({ geometry: Geometry.cylinder(0.25, 0.3, 1.4, 6), position: [x, 0.7, z] });
+  }
+  return [Geometry.merge(fol), Geometry.merge(trunk)];
+}
+const kartBody = Geometry.merge([
+  { geometry: Geometry.box(1.2, 0.3, 1.9), position: [0, 0.35, 0] },
+  { geometry: Geometry.box(0.9, 0.22, 0.6), position: [0, 0.4, 1.15] },
+  { geometry: Geometry.box(0.8, 0.45, 0.5), position: [0, 0.6, -0.55] },
+]);
+const wheelGeo = Geometry.cylinder(0.3, 0.3, 0.3, 12), headGeo = Geometry.sphere(0.27, 12, 8);
+const KARTS = [
+  { name: 'You', color: '#ff5a3d' },
+  { name: 'Blue', color: '#3d8aff', base: 28.5, lane: -1.6 },
+  { name: 'Lime', color: '#7ad13a', base: 27.6, lane: 1.4 },
+  { name: 'Gold', color: '#ffc23d', base: 26.8, lane: 0 },
+];
+function makeKart(color) {
+  const n = new Node();
+  n.add(mesh(kartBody, { color }));
+  const wm = new Material({ color: '#1a1a1e' });
+  n.wheels = [[-0.68, 0.7], [0.68, 0.7], [-0.68, -0.7], [0.68, -0.7]].map(([x, z]) => n.add(mesh(wheelGeo, wm, { position: [x, 0.3, z], rotation: [0, 0, Math.PI / 2] })));
+  n.add(mesh(headGeo, { color: '#f2f2f2', emissive: color, emissiveIntensity: 0.2 }, { position: [0, 1.05, -0.35] }));
+  return n;
+}
+const ord = (n) => n + (['th', 'st', 'nd', 'rd'][n % 10 > 3 || Math.floor(n / 10) === 1 ? 0 : n % 10] || 'th');
+const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(2).padStart(5, '0')}`;
+
+class Race extends Scene3D {
+  enter() {
+    Object.assign(this.env, { background: '#7cc0e8', fog: [60, 150], sky: '#d8f0ff', ground: '#5a8a4a', sunDir: [-0.5, -1, -0.3], sunIntensity: 0.85 });
+    this.camera.fov = 70; this.camera.far = 250;
+    this.add(mesh(Geometry.plane(400, 400), { color: '#5fae55' }, { position: [0, -0.01, 0] }));
+    this.add(mesh(roadGeometry(), { map: roadTex }));
+    this.add(mesh(curbs(false), { color: '#e8463a' }), mesh(curbs(true), { color: '#f4f4f4' }));
+    const [fol, trunk] = trees();
+    this.add(mesh(fol, { color: '#2f7a3a' }), mesh(trunk, { color: '#7a5030' }));
+    const s0 = TRACK.pts[0], rot = Math.atan2(s0.tx, s0.tz);
+    const startTex = Texture.canvas(64, 16, (g) => { for (let x = 0; x < 16; x++) for (let y = 0; y < 4; y++) { g.fillStyle = (x + y) % 2 ? '#111' : '#fff'; g.fillRect(x * 4, y * 4, 4, 4); } }, { smooth: false });
+    this.add(mesh(Geometry.box(HW * 2, 0.01, 1.4), { map: startTex }, { position: [s0.x, 0.03, s0.z], rotation: [0, rot, 0] }));
+    const banner = Texture.canvas(256, 64, (g, w, h) => { g.fillStyle = '#1a1a2a'; g.fillRect(0, 0, w, h); g.fillStyle = '#ffe066'; g.font = '700 40px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('FLINT GP', w / 2, h / 2 + 2); });
+    const gantry = this.add(new Node({ position: [s0.x, 0, s0.z], rotation: [0, rot, 0] }));
+    for (const x of [-HW - 0.8, HW + 0.8]) gantry.add(mesh(Geometry.box(0.4, 5, 0.4), { color: '#e8e8e8' }, { position: [x, 2.5, 0] }));
+    gantry.add(mesh(Geometry.box(HW * 2 + 2, 1.2, 0.3), { color: '#1a1a2a' }, { position: [0, 4.6, 0] }));
+    for (const sgn of [1, -1]) gantry.add(mesh(Geometry.quad(HW * 2, 1), { map: banner, unlit: true }, { position: [0, 4.6, sgn * 0.17], rotation: [0, sgn > 0 ? 0 : Math.PI, 0] }));
+    this.karts = KARTS.map((k) => Object.assign({}, k, { node: this.add(makeKart(k.color)) }));
+    this.best = store.get('driftkart:best', null);
+    this.place();
+    this.state = 'title';
+  }
+  place() {
+    // grid: everyone just behind the line
+    this.karts.forEach((k, i) => {
+      const s = TRACK.total - 4 - Math.floor(i / 2) * 4.5, p = pointAt(s), lane = i % 2 ? -1.6 : 1.6;
+      Object.assign(k, { s, x: p.x + p.nx * lane, z: p.z + p.nz * lane, h: Math.atan2(p.tx, p.tz), vx: 0, vz: 0, lap: 0, done: false, finishT: 0 });
+    });
+    const me = this.karts[0];
+    Object.assign(me, { idx: N - 3, cps: new Set(), lapStart: 0, bestLap: Infinity, drift: 0, boost: 0, offroad: false });
+    this.sync();
+  }
+  begin() {
+    this.place();
+    this.state = 'count'; this.countT = 3.2; this.raceT = 0; this.results = null;
+    this.audio.sfx('select');
+    this.startEngine();
+  }
+  startEngine() {
+    const a = this.audio;
+    if (!a.ctx || this.engine) return;
+    const o = a.ctx.createOscillator(), g = a.ctx.createGain(), f = a.ctx.createBiquadFilter();
+    o.type = 'sawtooth'; o.frequency.value = 60; f.type = 'lowpass'; f.frequency.value = 700; g.gain.value = 0.04;
+    o.connect(f); f.connect(g); g.connect(a.master); o.start();
+    this.engine = { o, g };
+  }
+  exit() { if (this.engine) { try { this.engine.o.stop(); } catch (e) { /* already stopped */ } this.engine = null; } }
+  blur() { if (this.engine) this.engine.g.gain.value = 0; }
+  resume() { if (this.engine) this.engine.g.gain.value = 0.04; }
+  sync() {
+    for (const k of this.karts) { k.node.position.set(k.x, 0, k.z); k.node.rotation.y = k.h; }
+  }
+  progress(k) { return k === this.karts[0] ? k.lap * TRACK.total + TRACK.pts[k.idx].d + (k.idx > N * 0.9 && !k.cps.size ? -TRACK.total : 0) : k.s - TRACK.total; }
+  update(dt) {
+    const input = this.input, me = this.karts[0];
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.state === 'title' || this.state === 'results') {
+      const a = this.time * 0.15;
+      this.camera.position.set(Math.sin(a) * 95, 46, Math.cos(a) * 95); this.camera.lookAt(0, 0, 0);
+      if (this.state === 'results') this.driveAI(dt);
+      if (this.time > 0.5 && input.pressed('go') && (this.state === 'title' || this.time - this.doneAt > 1.5)) this.begin();
+      this.sync();
+      return;
+    }
+    if (this.state === 'count') {
+      const before = Math.ceil(this.countT);
+      this.countT -= dt;
+      if (Math.ceil(this.countT) !== before && this.countT > 0) this.audio.tone({ freq: 440, dur: 0.15, type: 'square', vol: 0.1 });
+      if (this.countT <= 0) { this.state = 'race'; this.audio.tone({ freq: 880, dur: 0.4, type: 'square', vol: 0.12 }); }
+      this.chase(dt, true);
+      return;
+    }
+    this.raceT += dt;
+    this.drivePlayer(dt);
+    this.driveAI(dt);
+    this.bump();
+    this.sync();
+    this.chase(dt);
+    if (this.engine) {
+      const sp = Math.hypot(me.vx, me.vz);
+      this.engine.o.frequency.setTargetAtTime(55 + sp * 6 + (me.boost > 0 ? 40 : 0), this.audio.ctx.currentTime, 0.05);
+    }
+  }
+  drivePlayer(dt) {
+    const me = this.karts[0], input = this.input;
+    const fx = Math.sin(me.h), fz = Math.cos(me.h), lx = Math.cos(me.h), lz = -Math.sin(me.h);
+    let fwd = me.vx * fx + me.vz * fz, lat = me.vx * lx + me.vz * lz;
+    const gas = input.down('gas') || input.stick.y < -0.4, brake = input.down('brake');
+    const steer = input.axis('left', 'right') + input.stick.x;
+    // where am I on the track?
+    let best = me.idx, bd = 1e9;
+    for (let k = -12; k <= 12; k++) { const i = (me.idx + k + N) % N, p = TRACK.pts[i], d = Math.hypot(p.x - me.x, p.z - me.z); if (d < bd) { bd = d; best = i; } }
+    const prev = me.idx; me.idx = best;
+    me.offroad = bd > HW + 0.4;
+    for (const q of [1, 2, 3]) if (Math.abs(best - (q * N) / 4) < 6) me.cps.add(q);
+    if (prev > N * 0.8 && best < N * 0.2 && !me.done) {
+      if (me.cps.size >= 3) {
+        me.lap++;
+        const lapT = this.raceT - me.lapStart; me.lapStart = this.raceT; me.bestLap = Math.min(me.bestLap, lapT);
+        if (me.lap >= LAPS) this.finish();
+        else { this.msg = { text: me.lap === LAPS - 1 ? 'FINAL LAP' : `LAP ${me.lap + 1}`, t: 1.5 }; this.audio.sfx('powerup'); }
+      }
+      me.cps = new Set();
+    }
+    if (bd > HW + 16) { // way off course: back onto the road
+      const p = TRACK.pts[best];
+      Object.assign(me, { x: p.x, z: p.z, h: Math.atan2(p.tx, p.tz), vx: 0, vz: 0 });
+      this.msg = { text: 'back on track', t: 1 };
+      return;
+    }
+    const top = (me.offroad ? 12 : 27) + (me.boost > 0 ? 9 : 0);
+    if (gas && !me.done) fwd = Math.min(top, fwd + (me.boost > 0 ? 34 : 17) * dt);
+    if (brake) fwd = Math.max(-7, fwd - 26 * dt);
+    if (fwd > top) fwd = damp(fwd, top, 2.5, dt);
+    fwd *= Math.exp(-(me.offroad ? 1.4 : 0.25) * dt);
+    const drifting = input.down('drift') && Math.abs(steer) > 0.2 && fwd > 10 && !me.offroad;
+    const turn = steer * 2.1 * clamp(Math.abs(fwd) / 8, 0, 1) * Math.sign(fwd || 1) * (drifting ? 1.35 : 1);
+    me.h -= turn * dt;
+    lat *= Math.exp(-(drifting ? 1.8 : 9) * dt);
+    if (drifting) {
+      me.drift += dt;
+      const lvl = me.drift > 1.5 ? 2 : me.drift > 0.7 ? 1 : 0;
+      if (Math.random() < 0.7) this.particles.emit({ x: me.x - fx * 0.9 + lx * steer * 0.6, y: 0.15, z: me.z - fz * 0.9 + lz * steer * 0.6 }, { count: 2, speed: [0.5, 2], life: [0.15, 0.35], color: [['#dddddd', '#29a8ff', '#ff9a1f'][lvl], '#ffffff'], size: [0.06, 0.12] });
+    } else if (me.drift > 0) {
+      if (me.drift > 0.7) { me.boost = me.drift > 1.5 ? 1.3 : 0.7; this.msg = { text: me.drift > 1.5 ? 'SUPER BOOST!' : 'BOOST!', t: 0.8 }; this.audio.noise({ dur: 0.4, vol: 0.15, freq: 800, to: 3000, filter: 'bandpass' }); }
+      me.drift = 0;
+    }
+    me.boost = Math.max(0, me.boost - dt);
+    const nfx = Math.sin(me.h), nfz = Math.cos(me.h), nlx = Math.cos(me.h), nlz = -Math.sin(me.h);
+    me.vx = nfx * fwd + nlx * lat; me.vz = nfz * fwd + nlz * lat;
+    me.x += me.vx * dt; me.z += me.vz * dt;
+    me.node.wheels.forEach((w) => (w.rotation.x += fwd * dt * 3));
+    me.node.rotation.z = clamp(-lat * 0.02, -0.12, 0.12);
+    if (me.offroad && Math.abs(fwd) > 5 && Math.random() < 0.4) this.particles.emit({ x: me.x, y: 0.1, z: me.z }, { count: 1, speed: [0.3, 1], life: [0.3, 0.5], color: '#8a6a40', size: [0.08, 0.14] });
+  }
+  driveAI(dt) {
+    const me = this.karts[0], myP = this.progress(me);
+    for (const k of this.karts.slice(1)) {
+      if (this.state === 'count') continue;
+      const p = pointAt(k.s), ahead = this.progress(k) - myP;
+      let sp = k.base * (1 - p.curve * 3.2);
+      if (this.state === 'race') sp *= ahead > 30 ? 0.9 : ahead < -30 ? 1.1 : 1;
+      k.v = damp(k.v || 0, sp, 1.5, dt);
+      k.s += k.v * dt;
+      const q = pointAt(k.s), lane = k.lane + Math.sin(this.time * 0.4 + k.base) * 1.2;
+      k.x = q.x + q.nx * lane; k.z = q.z + q.nz * lane; k.h = Math.atan2(q.tx, q.tz);
+      k.node.wheels.forEach((w) => (w.rotation.x += k.v * dt * 3));
+    }
+  }
+  bump() {
+    const me = this.karts[0];
+    for (const k of this.karts.slice(1)) {
+      const dx = me.x - k.x, dz = me.z - k.z, d = Math.hypot(dx, dz);
+      if (d > 1.7 || d === 0) continue;
+      me.x += (dx / d) * (1.7 - d); me.z += (dz / d) * (1.7 - d);
+      me.vx *= 0.85; me.vz *= 0.85;
+      if (!this.bumpT || this.time - this.bumpT > 0.3) { this.bumpT = this.time; this.audio.noise({ dur: 0.08, vol: 0.15, freq: 700 }); this.camera.shake(0.08, 0.15); }
+    }
+  }
+  rank() {
+    const prog = this.karts.map((k) => (k === this.karts[0] && k.done ? Infinity - k.finishPlace : this.progress(k)));
+    const mine = prog[0];
+    return 1 + prog.slice(1).filter((p) => p > mine).length;
+  }
+  finish() {
+    const me = this.karts[0];
+    me.done = true;
+    const place = this.rank();
+    me.finishPlace = place;
+    this.results = { place, time: this.raceT, bestLap: me.bestLap };
+    const b = this.best || {};
+    this.newBest = !b.time || this.raceT < b.time;
+    this.best = { time: Math.min(this.raceT, b.time || Infinity), lap: Math.min(me.bestLap, b.lap || Infinity), place: Math.min(place, b.place || 9) };
+    store.set('driftkart:best', this.best);
+    this.state = 'results'; this.doneAt = this.time;
+    this.audio.sfx(place === 1 ? 'win' : 'powerup');
+    if (this.engine) this.engine.g.gain.setTargetAtTime(0.01, this.audio.ctx.currentTime, 0.3);
+  }
+  chase(dt, snap) {
+    const me = this.karts[0], fx = Math.sin(me.h), fz = Math.cos(me.h), c = this.camera;
+    const tx = me.x - fx * 6.2, tz = me.z - fz * 6.2, k = snap ? 50 : 6;
+    c.position.set(damp(c.position.x, tx, k, dt), damp(c.position.y, 2.8, k, dt), damp(c.position.z, tz, k, dt));
+    c.lookAt(me.x + fx * 3, 0.9, me.z + fz * 3);
+    c.fov = damp(c.fov, me.boost > 0 ? 80 : 70, 4, dt);
+  }
+  drawUI(ctx) {
+    const W = this.width, H = this.height, big = Math.min(W, H);
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ color: '#ffffff', shadow: 'rgba(0,0,0,.55)', shadowOffset: 2, font: 'system-ui, -apple-system, "Segoe UI", sans-serif', weight: '800', size: 16 }, o));
+    const me = this.karts[0];
+    // minimap
+    const ms = Math.min(120, big * 0.22), mx = W - ms - 14, my = 14, sc = ms / 150;
+    ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(mx - 6, my - 6, ms + 12, ms + 12);
+    ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 3; ctx.beginPath();
+    TRACK.pts.forEach((p, i) => { const x = mx + ms / 2 + p.x * sc, y = my + ms / 2 + p.z * sc; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath(); ctx.stroke();
+    for (const k of [...this.karts].reverse()) { ctx.fillStyle = k.color; ctx.beginPath(); ctx.arc(mx + ms / 2 + k.x * sc, my + ms / 2 + k.z * sc, k === me ? 4 : 3, 0, Math.PI * 2); ctx.fill(); }
+    if (this.state === 'title') {
+      t('DRIFT KART', W / 2, H * 0.12, { size: big * 0.11, align: 'center', color: '#ffe066' });
+      t(`${LAPS} laps · three rivals · hold drift through corners for a boost`, W / 2, H * 0.12 + big * 0.13, { size: Math.max(13, big * 0.032), align: 'center', weight: '600' });
+      t('↑/W gas · ←/→ steer · ↓ brake · Space drift (on touch: A gas, B drift)', W / 2, H * 0.12 + big * 0.18, { size: Math.max(11, big * 0.024), align: 'center', weight: '500' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Enter or tap to race', W / 2, H * 0.8, { size: Math.max(15, big * 0.038), align: 'center' });
+      if (this.best && this.best.time) t(`best race ${fmt(this.best.time)} · best lap ${fmt(this.best.lap)}`, W / 2, H * 0.8 + big * 0.06, { size: Math.max(12, big * 0.028), align: 'center', weight: '600' });
+      return;
+    }
+    const place = me.done ? me.finishPlace : this.rank();
+    t(ord(place), 16, 12, { size: Math.max(30, big * 0.08), color: place === 1 ? '#ffe066' : '#ffffff' });
+    t(`LAP ${Math.min(me.lap + 1, LAPS)}/${LAPS}`, 16, 18 + Math.max(30, big * 0.08), { size: 16 });
+    t(fmt(this.raceT || 0), 16, 40 + Math.max(30, big * 0.08), { size: 14, weight: '600' });
+    t(`${Math.round(Math.hypot(me.vx, me.vz) * 3.6)} km/h`, W / 2, H - 40, { size: 18, align: 'center' });
+    if (me.drift > 0.7) t(me.drift > 1.5 ? 'release for SUPER BOOST' : 'keep drifting…', W / 2, H - 64, { size: 13, align: 'center', color: me.drift > 1.5 ? '#ff9a1f' : '#29a8ff' });
+    if (this.state === 'count') t(this.countT > 0 ? String(Math.ceil(this.countT)) : 'GO!', W / 2, H * 0.3, { size: big * 0.16, align: 'center', color: '#ffe066' });
+    if (this.msg) { this.msg.t -= 1 / 60; t(this.msg.text, W / 2, H * 0.22, { size: Math.max(18, big * 0.05), align: 'center', color: '#ffe066', alpha: clamp(this.msg.t * 2, 0, 1) }); if (this.msg.t <= 0) this.msg = null; }
+    if (this.state === 'results') {
+      const r = this.results;
+      ctx.fillStyle = 'rgba(10,20,40,.7)'; ctx.fillRect(0, H * 0.32, W, H * 0.36);
+      t(r.place === 1 ? 'YOU WIN!' : `${ord(r.place)} PLACE`, W / 2, H * 0.35, { size: big * 0.09, align: 'center', color: r.place === 1 ? '#ffe066' : '#ffffff' });
+      t(`race ${fmt(r.time)} · best lap ${fmt(r.bestLap)}${this.newBest ? ' · new record!' : ''}`, W / 2, H * 0.35 + big * 0.11, { size: Math.max(14, big * 0.034), align: 'center', weight: '600' });
+      if (this.time - this.doneAt > 1.5) t('Enter or tap to race again', W / 2, H * 0.35 + big * 0.18, { size: Math.max(13, big * 0.03), align: 'center', weight: '600' });
+    }
+  }
+}
+
+game.start(new Race());
+window.driftKart = game;
+</script>
+</body>
+</html>

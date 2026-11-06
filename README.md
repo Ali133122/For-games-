@@ -12,7 +12,7 @@ Open [`index.html`](index.html) in a browser to walk around a 3D neon arcade. Ev
 1. Put the game in its own folder with an `index.html` inside, e.g. `my-game/index.html`.
 2. Add an entry to [`games.js`](games.js) with a title, path, neon color, tagline and controls.
 
-The room grows to fit however many cabinets there are. You can also press **+ Add game** inside the arcade to add a cabinet without editing files. Those are saved in your browser only.
+Add `room: 2` to put a game in the back room. The arcade has two rooms joined by a glowing doorway: the **main floor** and the **back room**, each with its own look. Walk through the doorway to switch rooms. Each room grows to fit however many cabinets it has. You can also press **+ Add game** inside the arcade to add a cabinet without editing files. Those are saved in your browser only.
 
 ## Flint game engine
 [`flint/flint.js`](flint/flint.js) is a tiny 2D game engine in one file with no dependencies. It covers scenes, entities, tilemaps with collision, a camera, keyboard/mouse/touch/gamepad input, sprites and animation, particles, tweens and synthesized sound.
@@ -46,7 +46,7 @@ Robots pop out of nine pipes. Bop them with the mallet before they duck back dow
 - Blue bots are worth 1 point and gold bots 3. **Never bop the red, spiky ones:** each one costs a heart, and you have three
 - Five hits in a row starts a combo multiplier. Missing, or hitting an empty pipe, resets it
 
-### Star Sweeper
+### Star Sweeper (back room)
 Open [`star-sweeper/index.html`](star-sweeper/index.html). Built with Flint.
 
 A neon arena shooter. Your ship fires automatically, at the mouse if you're using one and otherwise at the nearest enemy.
@@ -55,7 +55,7 @@ A neon arena shooter. Your ship fires automatically, at the mouse if you're usin
 - Enemies: drifters chase you, dashers flash a line before they charge, rocks split in two, and gunners shoot back from a distance
 - Collect the green gems that enemies drop to raise your score multiplier, up to ×5. Getting hit resets it. **T** gives triple shot and **S** gives a shield
 
-### Prism Breaker
+### Prism Breaker (back room)
 Open [`prism-breaker/index.html`](prism-breaker/index.html). Built with Flint.
 
 A brick breaker with five levels. They loop, getting faster each time.
@@ -81,7 +81,7 @@ Fly a glider down a sunset canyon. Every gold ring you fly through adds time to 
 - **Steer:** arrows or WASD, the mouse, or drag on a touch screen
 - The game ends when you crash or the clock runs out. Your best score is saved
 
-### Beat Lanes
+### Beat Lanes (back room)
 Open [`beat-lanes/index.html`](beat-lanes/index.html). Built with Flint.
 
 A rhythm game. Notes fall down four lanes, and you hit each one as it crosses the line. The music (drums, bass and chords) is synthesized in code, and each note you hit plays part of the melody.
@@ -89,12 +89,46 @@ A rhythm game. Notes fall down four lanes, and you hit each one as it crosses th
 - **Hit:** D F J K (or ← ↓ ↑ →), or tap the lanes on a touch screen. Multi-touch works for two-note chords
 - Easy, Normal and Hard each have their own note chart. You're graded Perfect, Great, Good or Miss on every note, and S to D at the end. Your best score per difficulty is saved
 
-### Tile Twins
+### Tile Twins (back room)
 Open [`tile-twins/index.html`](tile-twins/index.html). Built with Flint.
 
 A memory puzzle. Flip two tiles at a time to find matching pairs, across three boards that get bigger (6, 10 and 12 pairs). Fewer flips earn more stars, up to 9 in total.
 
 - **Flip:** click or tap a tile, or use the arrow keys and Space
+
+### Drift Kart (back room)
+Open [`drift-kart/index.html`](drift-kart/index.html). A 3D game built with Flint3D.
+
+A three-lap kart race against three rivals on a tree-lined circuit.
+
+- **Drive:** ↑ or W for gas, ←/→ to steer, ↓ to brake. On touch screens, use the on-screen buttons (A is gas, B is drift)
+- **Drift:** hold Space while you steer through a corner. The sparks turn blue, then orange. Let go for a boost, and the longer the drift, the bigger the boost
+- Leaving the road slows you down. A minimap shows everyone's position. Your best race and best lap times are saved
+
+### Tower Guard (back room)
+Open [`tower-guard/index.html`](tower-guard/index.html). Built with Flint.
+
+Tower defense across 15 waves. Build towers on the grass beside the road so nothing reaches the end.
+
+- **Towers:** Bolt (fast single zaps), Frost (slows everything nearby) and Cannon (splash damage). Each can be upgraded twice
+- Click or tap a tile to build, or click a tower to upgrade (U) or sell (S). 1, 2 and 3 pick a tower type, Space sends the next wave early, and F switches between normal and double speed
+- Waves 5, 10 and 15 bring a boss. A boss that reaches the end costs 5 of your 20 lives
+
+### Deep Cast (back room)
+Open [`deep-cast/index.html`](deep-cast/index.html). Built with Flint.
+
+A fishing game played with one button (Space, click or touch). Hold to charge your cast and let go to throw. Hold again to reel in, and press quickly when a fish bites. Then keep the line tension in the green: too tight and the line snaps, too slack and the fish swims off.
+
+- Six catches, from minnows near the surface down to pike and a rare Golden Koi in the depths. You might also hook an old boot
+- A day lasts two and a half minutes. Your journal remembers every species you've caught and the biggest of each
+
+### Bubble Burst (back room)
+Open [`bubble-burst/index.html`](bubble-burst/index.html). Built with Flint.
+
+A bubble shooter. Pop groups of three or more of one color. Any bubbles left hanging when their support pops fall off for bonus points.
+
+- **Aim:** mouse or ←/→ (drag on touch). **Shoot:** click or Space (let go on touch). **Swap with the next bubble:** X
+- Each shot that doesn't pop anything brings the ceiling closer. Clearing the board starts a new level with one more color. Don't let the bubbles reach the dashed line
 
 ### Sparkwood
 Open [`sparkwood/index.html`](sparkwood/index.html) in a browser. It's built with Flint and works offline.

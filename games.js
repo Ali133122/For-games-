@@ -9,6 +9,7 @@
 //   color    the cabinet's neon color
 //   tagline  one line under the title
 //   controls how to play, shown when you walk up to the cabinet
+//   room     1 = main floor (the default), 2 = the back room, through the glowing doorway
 window.ARCADE_GAMES = [
   {
     title: 'Orb Rush',
@@ -37,6 +38,7 @@ window.ARCADE_GAMES = [
     color: '#29e3ff',
     tagline: 'Neon arena shooter, endless waves',
     controls: 'WASD move · mouse aims · X bomb · drag on touch',
+    room: 2,
   },
   {
     title: 'Prism Breaker',
@@ -44,6 +46,7 @@ window.ARCADE_GAMES = [
     color: '#9b8cff',
     tagline: 'Brick breaker with power-ups',
     controls: '←/→ or mouse move · Space launch · P pause',
+    room: 2,
   },
   {
     title: 'Mini Putt',
@@ -65,6 +68,7 @@ window.ARCADE_GAMES = [
     color: '#ffe066',
     tagline: 'Rhythm game with three difficulties',
     controls: 'D F J K or arrows on the beat · tap lanes',
+    room: 2,
   },
   {
     title: 'Tile Twins',
@@ -72,6 +76,7 @@ window.ARCADE_GAMES = [
     color: '#ff6b8b',
     tagline: 'Memory match puzzle, three boards',
     controls: 'Click or tap tiles · or arrows and Space',
+    room: 2,
   },
   {
     title: 'Sparkwood',
@@ -93,5 +98,37 @@ window.ARCADE_GAMES = [
     color: '#5aa9ff',
     tagline: 'Chess against five computer levels',
     controls: 'Drag or click pieces · H hint · U undo',
+  },
+  {
+    title: 'Drift Kart',
+    path: 'drift-kart/index.html',
+    color: '#ff5a3d',
+    tagline: '3D: three laps, beat your best time',
+    controls: '↑/W gas · ←/→ steer · Space drift · touch buttons',
+    room: 2,
+  },
+  {
+    title: 'Tower Guard',
+    path: 'tower-guard/index.html',
+    color: '#8dffa8',
+    tagline: 'Build towers, hold the path for 15 waves',
+    controls: 'Click or tap to build and upgrade · Space next wave',
+    room: 2,
+  },
+  {
+    title: 'Deep Cast',
+    path: 'deep-cast/index.html',
+    color: '#4dd9e8',
+    tagline: 'Fishing: cast, hook and reel them in',
+    controls: 'Hold Space or press to cast and reel',
+    room: 2,
+  },
+  {
+    title: 'Bubble Burst',
+    path: 'bubble-burst/index.html',
+    color: '#ff8fd0',
+    tagline: 'Pop three or more of a color',
+    controls: 'Aim with the mouse or ←/→ · click or Space shoots',
+    room: 2,
   },
 ];

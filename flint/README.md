@@ -4,6 +4,7 @@ A tiny 2D game engine for the browser. It's one file ([`flint.js`](flint.js), ab
 
 - **See it in action:** [`../sparkwood/index.html`](../sparkwood/index.html) is a complete two-level platformer built with Flint
 - **Smallest example:** [`examples/hello.html`](examples/hello.html), about 40 lines
+- **3D:** [`flint3d.js`](flint3d.js) adds WebGL 3D (see [Flint3D](#flint3d) below). [`../orb-rush/index.html`](../orb-rush/index.html) and the arcade at [`../index.html`](../index.html) are built with it
 - **Tests:** `node --test flint/test/*.test.js`
 
 ## What's in it
@@ -192,6 +193,43 @@ Loaded sounds work too (`await game.assets.sound('boom', 'boom.ogg')`, then `aud
 
 `Flint.clamp lerp approach damp wrap remap sign dist angleTo`, `Flint.rand randInt pick chance`, `new Flint.Random(seed)`, `Flint.Vec2`, `Flint.Ease.*`, `Flint.Collide.*`, `Flint.text(ctx, str, x, y, { size, color, align, shadow })`, `Flint.store.get/set` (a `localStorage` wrapper that never throws), `Flint.NOTE('A4')` → 440.
 
+## Flint3D
+
+[`flint3d.js`](flint3d.js) adds 3D. Load it after `flint.js`. It draws with WebGL and puts a 2D canvas on top, so `drawUI(ctx)` and Flint's text and touch buttons work just like in 2D. Input, audio, timers, tweens and storage are the same objects as in 2D Flint.
+
+```html
+<script src="flint.js"></script>
+<script src="flint3d.js"></script>
+<script>
+const { Game3D, Scene3D, Geometry, mesh } = Flint3D;
+class Spin extends Scene3D {
+  enter() {
+    this.cube = this.add(mesh(Geometry.box(1, 1, 1), { color: '#ffb347', emissive: '#402000' }));
+    this.camera.position.set(0, 1.5, 4);
+    this.camera.lookAt(0, 0, 0);
+  }
+  update(dt) { this.cube.rotation.y += dt; }
+  drawUI(ctx) { Flint.text(ctx, 'hello 3D', 12, 12, { size: 16 }); }
+}
+new Game3D().start(new Spin());
+</script>
+```
+
+| Part | What you get |
+|---|---|
+| `Game3D` | Full-window (or `parent`) WebGL canvas with a HUD canvas on top. Same `switch`/`push`/`pop` scenes as 2D, plus a debug overlay on <kbd>`</kbd> showing draw calls and triangles |
+| `Scene3D` | `root`, `camera`, `env`, `particles`, `timers`, `tweens`. Override `enter`, `update(dt)`, `drawUI(ctx)`. `toScreen(point)` gives HUD coordinates for labels |
+| `Geometry` | `box`, `plane` (with texture repeat), `quad`, `sphere`, `cylinder`, `cone`, `gem`, `flat()` for a low-poly look, and `merge()` to bake many pieces into one draw call |
+| `Material` | `color`, `emissive` + `emissiveIntensity` (glow), `opacity`, `map` (a `Texture`), `unlit`, `doubleSided`, `fog` |
+| `Texture` | `Texture.canvas(w, h, draw)` gives a texture you draw with the 2D canvas API. Redraw it any time, e.g. for animated screens |
+| `Node` / `mesh()` | Scene graph with `position`, `rotation` (yaw, pitch, roll), `scale`, children, `onUpdate(dt)`, `find(name)` |
+| `Camera3D` | `position`, `lookAt()`, `setYawPitch()` for first-person, `fov`, `shake()`, `project()` |
+| Lighting | `env` has a sky/ground ambient, a sun, fog, and `env.lights`: point lights `{ position, color, intensity, range }`. The 4 nearest the camera are used |
+| `Collide3D` | Box/box, sphere/sphere, sphere/box, and `slideXZ()` for walking around while sliding along walls |
+| `Particles3D` | `emit(position, { count, speed, life, size, color, gravity, velocity })`. Bursts of glowing cubes |
+
+Colors can be `'#f80'`, `'#ff8800'`, `0xff8800` or `[r, g, b]` from 0 to 1. Use arrays for colors you animate every frame.
+
 ## Using it in Node
 
-`require('./flint/flint.js')` gives you everything except `Game`, which needs a browser. That's how the tests run, and it's handy for level validators or other server-side checks.
+`require('./flint/flint.js')` gives you everything except `Game`, which needs a browser. `require('./flint/flint3d.js')` works the same way for the 3D math, geometry and collision. That's how the tests run, and it's handy for level validators or other server-side checks.

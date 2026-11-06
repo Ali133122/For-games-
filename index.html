@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Flint Arcade</title>
+<style>
+  :root {
+    --bg: #07060c; --panel: rgba(20, 16, 32, .92); --line: #342b4d; --fg: #f1ecfa; --muted: #a79cc0; --accent: #ff3fb0; --gold: #ffd23f;
+    --mono: ui-monospace, Menlo, Consolas, monospace; --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: var(--sans); overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  .bar { position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
+    display: flex; justify-content: space-between; align-items: center; gap: 8px; pointer-events: none; z-index: 2; }
+  .brand { font-family: var(--mono); font-weight: 700; letter-spacing: .14em; font-size: 14px; color: var(--gold); text-shadow: 0 0 10px rgba(255, 210, 63, .5); }
+  .brand { white-space: nowrap; }
+  .brand span { color: var(--muted); letter-spacing: .04em; font-weight: 400; margin-left: 8px; }
+  @media (max-width: 560px) { .brand span { display: none; } .brand { font-size: 12px; } button { padding: 6px 9px; font-size: 12px; } }
+  .buttons { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; pointer-events: auto; }
+  button { font: 600 13px var(--sans); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #12061f; }
+  .panel { position: fixed; z-index: 3; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 80px); overflow: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; box-shadow: 0 20px 60px rgba(0, 0, 0, .6); backdrop-filter: blur(6px); }
+  .panel h2 { margin: 0 0 12px; font: 700 18px var(--mono); letter-spacing: .08em; color: var(--gold); }
+  .panel p { margin: 0 0 12px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .panel code { font-family: var(--mono); color: var(--fg); font-size: 13px; }
+  .list { display: grid; gap: 8px; margin-bottom: 12px; }
+  .row { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+  .row .dot { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 10px currentColor; background: currentColor; }
+  .row b { display: block; font-size: 15px; }
+  .row small { color: var(--muted); font-size: 12px; }
+  .row .acts { display: flex; gap: 6px; }
+  form { display: grid; gap: 10px; }
+  label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  input { font: 15px var(--sans); color: var(--fg); background: #0e0b17; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; }
+  input[type=color] { padding: 2px; height: 36px; }
+  .two { display: grid; grid-template-columns: 1fr 90px; gap: 10px; }
+  .end { display: flex; gap: 8px; justify-content: flex-end; }
+  .err { color: #ff7b8a; font-size: 13px; min-height: 1em; margin: 0; }
+  #player { position: fixed; inset: 0; z-index: 5; background: #000; display: grid; grid-template-rows: auto 1fr; }
+  #player header { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #100c1a; border-bottom: 2px solid var(--accent);
+    padding: calc(6px + env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) 6px max(12px, env(safe-area-inset-left, 0px)); }
+  #player header b { font: 700 14px var(--mono); letter-spacing: .1em; }
+  #player iframe { border: 0; width: 100%; height: 100%; background: #000; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div class="bar">
+  <div class="brand">FLINT ARCADE<span id="count"></span></div>
+  <div class="buttons">
+    <button id="listBtn" type="button">All games</button>
+    <button id="addBtn" type="button">+ Add game</button>
+    <button id="soundBtn" type="button">Sound on</button>
+  </div>
+</div>
+
+<div class="panel" id="listPanel" hidden role="dialog" aria-labelledby="listTitle">
+  <h2 id="listTitle">ALL GAMES</h2>
+  <div class="list" id="gameList"></div>
+  <p>Games come from <code>games.js</code>. Games you add with <b>+ Add game</b> are saved in this browser.</p>
+  <div class="end"><button type="button" data-close>Close</button></div>
+</div>
+
+<div class="panel" id="addPanel" hidden role="dialog" aria-labelledby="addTitle">
+  <h2 id="addTitle">ADD A GAME</h2>
+  <p>A new cabinet appears in the arcade. Use a folder from this repo, like <code>my-game/index.html</code>, or a full web address. Some websites block being shown inside other pages and won't load.</p>
+  <form id="addForm">
+    <label>Name <input id="fTitle" required maxlength="24" placeholder="Space Pong"></label>
+    <div class="two">
+      <label>Address <input id="fPath" required placeholder="my-game/index.html"></label>
+      <label>Neon <input id="fColor" type="color" value="#4dffb8"></label>
+    </div>
+    <label>Tagline <input id="fTag" maxlength="40" placeholder="Bounce the comet past the moon"></label>
+    <label>Controls <input id="fControls" maxlength="60" placeholder="Arrow keys move · Space fires"></label>
+    <p class="err" id="fErr"></p>
+    <div class="end"><button type="button" data-close>Cancel</button><button class="primary" type="submit">Add cabinet</button></div>
+  </form>
+</div>
+
+<div id="player" hidden>
+  <header><b id="playTitle"></b><button id="backBtn" type="button">← Back to arcade</button></header>
+  <iframe id="frame" title="Game" allow="autoplay; fullscreen; gamepad"></iframe>
+</div>
+
+<script src="flint/flint.js"></script>
+<script src="flint/flint3d.js"></script>
+<script src="games.js"></script>
+<script>
+'use strict';
+// Flint Arcade: walk around a 3D arcade and play the games in this repo. Built with Flint3D.
+const { Game3D, Scene3D, Geometry, Texture, Material, Node, mesh, Collide3D } = Flint3D;
+const { store, text, damp, clamp, lerp, rand } = Flint;
+const $ = (id) => document.getElementById(id);
+
+const CUSTOM_KEY = 'flint-arcade:custom';
+const allGames = () => [...(window.ARCADE_GAMES || []), ...store.get(CUSTOM_KEY, []).map((g) => Object.assign({ custom: true }, g))];
+
+const game = new Game3D({ parent: '#stage', touchButtons: [] });
+const inp = game.input;
+inp.bind('fwd', ['KeyW', 'ArrowUp', 'PadUp']);
+inp.bind('back', ['KeyS', 'ArrowDown', 'PadDown']);
+inp.bind('strafeL', ['KeyA', 'PadLeft']);
+inp.bind('strafeR', ['KeyD', 'PadRight']);
+inp.bind('turnL', ['ArrowLeft', 'KeyQ', 'PadL']);
+inp.bind('turnR', ['ArrowRight', 'PadR']);
+inp.bind('play', ['KeyE', 'Enter', 'Space', 'PadA']);
+
+const hsl = (h, s, l) => {
+  const k = (n) => (n + h * 12) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [f(0), f(8), f(4)];
+};
+const isTouch = () => game.input.touchActive || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
+
+// ── shared art ──
+const floorTex = Texture.canvas(256, 256, (g, w) => {
+  const h = w / 2;
+  g.fillStyle = '#141022'; g.fillRect(0, 0, w, w);
+  g.fillStyle = '#1c1631'; g.fillRect(0, 0, h, h); g.fillRect(h, h, h, h);
+  g.globalAlpha = 0.5;
+  const dots = ['#ff3fb0', '#29e3ff', '#ffd23f', '#7a2cff'];
+  for (let i = 0; i < 26; i++) { g.fillStyle = dots[i % 4]; g.beginPath(); g.arc((i * 97) % w, (i * 57) % w, 2 + (i % 3), 0, Math.PI * 2); g.fill(); }
+}, { repeat: true });
+const sign = Texture.canvas(1024, 256, (g, w, h) => {
+  g.fillStyle = '#0c0914'; g.fillRect(0, 0, w, h);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '700 120px ui-monospace, Menlo, Consolas, monospace';
+  g.shadowColor = '#ff3fb0'; g.shadowBlur = 30; g.fillStyle = '#ffd6f0';
+  g.fillText('FLINT ARCADE', w / 2, h * 0.42);
+  g.shadowColor = '#29e3ff'; g.shadowBlur = 16; g.fillStyle = '#bff9ff';
+  g.font = '500 34px ui-monospace, Menlo, Consolas, monospace';
+  g.fillText('walk up to a cabinet · press E or tap to play', w / 2, h * 0.8);
+});
+
+const CAB = {
+  body: Geometry.box(1.1, 2.0, 0.9), trim: Geometry.box(0.05, 2.0, 0.05), screen: Geometry.quad(0.86, 0.64),
+  marquee: Geometry.box(1.14, 0.34, 0.3), marqueeFace: Geometry.quad(1.08, 0.28), panel: Geometry.box(1.1, 0.1, 0.46),
+  stick: Geometry.cylinder(0.022, 0.022, 0.16, 8), ball: Geometry.sphere(0.055, 10, 8), button: Geometry.cylinder(0.045, 0.045, 0.04, 12),
+  glow: Geometry.plane(1.8, 1.6), coin: Geometry.box(0.26, 0.18, 0.02),
+};
+const darkBody = new Material({ color: '#1a1526' });
+
+function drawScreen(t, gm, time, focused) {
+  t.redraw((g, w, h) => {
+    const c = gm.color;
+    const bg = g.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, '#05040a'); bg.addColorStop(1, c + '55');
+    g.fillStyle = bg; g.fillRect(0, 0, w, h);
+    g.fillStyle = c;
+    for (let i = 0; i < 24; i++) {
+      const x = (i * 53 + time * (20 + (i % 5) * 14)) % w, y = (i * 37) % (h - 40) + 6;
+      g.globalAlpha = 0.25 + (i % 3) * 0.2; g.fillRect(x, y, 2, 2);
+    }
+    g.globalAlpha = 1;
+    // bouncing sprite
+    const bx = (Math.sin(time * 1.3 + gm.title.length) * 0.4 + 0.5) * (w - 20), by = h - 46 - Math.abs(Math.sin(time * 3.1)) * 30;
+    g.fillStyle = c; g.fillRect(bx, by, 14, 14); g.fillStyle = '#fff'; g.fillRect(bx + 8, by + 4, 3, 3);
+    g.fillStyle = c; g.globalAlpha = 0.6; g.fillRect(0, h - 30, w, 2); g.globalAlpha = 1;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = '700 30px ui-monospace, Menlo, Consolas, monospace';
+    g.shadowColor = c; g.shadowBlur = 14; g.fillStyle = '#ffffff';
+    g.fillText(gm.title.toUpperCase().slice(0, 14), w / 2, 44);
+    g.shadowBlur = 0;
+    g.font = '15px ui-monospace, Menlo, Consolas, monospace'; g.fillStyle = '#e8e0f4';
+    g.fillText((gm.tagline || '').slice(0, 30), w / 2, 76);
+    if (Math.floor(time * 2.5) % 2 === 0) {
+      g.font = '700 16px ui-monospace, Menlo, Consolas, monospace'; g.fillStyle = focused ? '#ffd23f' : '#ffffff';
+      g.fillText(focused ? '▶ PRESS E TO PLAY' : 'INSERT COIN', w / 2, h - 14);
+    }
+    // scanlines
+    g.fillStyle = 'rgba(0,0,0,.18)';
+    for (let y = 0; y < h; y += 3) g.fillRect(0, y, w, 1);
+  });
+}
+
+function buildCabinet(gm, angle, radius) {
+  const group = new Node({ position: [Math.sin(angle) * radius, 0, Math.cos(angle) * radius], rotation: [0, angle + Math.PI, 0] });
+  const neon = new Material({ color: '#000', emissive: gm.color, emissiveIntensity: 0.9 });
+  group.add(mesh(CAB.body, darkBody, { position: [0, 1, 0] }));
+  for (const x of [-0.55, 0.55]) group.add(mesh(CAB.trim, neon, { position: [x, 1, 0.45] }));
+  const screenTex = Texture.canvas(256, 160);
+  group.add(mesh(CAB.screen, new Material({ map: screenTex, unlit: true }), { position: [0, 1.42, 0.456] }));
+  group.add(mesh(CAB.marquee, darkBody, { position: [0, 2.12, 0.3] }));
+  const mTex = Texture.canvas(512, 128, (g, w, h) => {
+    g.fillStyle = '#0b0912'; g.fillRect(0, 0, w, h);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    let size = 70; g.font = `700 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+    while (g.measureText(gm.title.toUpperCase()).width > w - 30 && size > 24) g.font = `700 ${(size -= 4)}px ui-monospace, Menlo, Consolas, monospace`;
+    g.shadowColor = gm.color; g.shadowBlur = 22; g.fillStyle = gm.color;
+    g.fillText(gm.title.toUpperCase(), w / 2, h / 2 + 4);
+    g.fillStyle = '#fff'; g.shadowBlur = 6; g.globalAlpha = 0.65; g.fillText(gm.title.toUpperCase(), w / 2, h / 2 + 4);
+  });
+  group.add(mesh(CAB.marqueeFace, new Material({ map: mTex, unlit: true }), { position: [0, 2.12, 0.452] }));
+  group.add(mesh(CAB.panel, darkBody, { position: [0, 1.02, 0.62], rotation: [0.28, 0, 0] }));
+  group.add(mesh(CAB.stick, new Material({ color: '#888' }), { position: [-0.25, 1.13, 0.64] }));
+  group.add(mesh(CAB.ball, new Material({ color: '#e8505b', emissive: '#e8505b', emissiveIntensity: 0.25 }), { position: [-0.25, 1.22, 0.64] }));
+  for (const [x, col] of [[0.12, gm.color], [0.27, '#ffffff']]) group.add(mesh(CAB.button, new Material({ color: col, emissive: col, emissiveIntensity: 0.5 }), { position: [x, 1.1, 0.63], rotation: [0.28, 0, 0] }));
+  group.add(mesh(CAB.coin, new Material({ color: '#000', emissive: '#ff7a2c', emissiveIntensity: 0.7 }), { position: [0, 0.5, 0.455] }));
+  const glow = group.add(mesh(CAB.glow, new Material({ color: gm.color, unlit: true, opacity: 0.18, fog: false }), { position: [0, 0.012, 0.7] }));
+  const front = { x: Math.sin(angle) * (radius - 1.1), z: Math.cos(angle) * (radius - 1.1) };
+  const light = { position: { x: front.x, y: 1.9, z: front.z }, color: gm.color, intensity: 1.1, range: 4.5 };
+  return {
+    gm, group, screenTex, glow, light, angle, front,
+    screen: { x: Math.sin(angle) * (radius - 0.46), y: 1.42, z: Math.cos(angle) * (radius - 0.46) },
+    normal: { x: -Math.sin(angle), z: -Math.cos(angle) },
+    box: { x: Math.sin(angle) * radius, z: Math.cos(angle) * radius, w: 1.25, d: 1.25 },
+  };
+}
+
+class Arcade extends Scene3D {
+  enter() {
+    Object.assign(this.env, { background: '#07060c', fog: [7, 26], fogColor: '#07060c', sky: '#3c3560', ground: '#130f1f', sunIntensity: 0.12 });
+    this.camera.fov = 70;
+    const games = allGames();
+    this.games = games;
+    $('count').textContent = `${games.length} game${games.length === 1 ? '' : 's'}`;
+    const R = Math.max(4.6, (games.length * 2.0) / (Math.PI * 2));
+    this.R = R;
+    const H = R + 2.6, WALL_H = 4;
+    this.half = H;
+
+    // room: floor, ceiling, walls, neon strips
+    this.add(mesh(Geometry.plane(H * 2, H * 2, H, H), new Material({ map: floorTex }), {}));
+    this.add(mesh(Geometry.plane(H * 2, H * 2), new Material({ color: '#0b0913' }), { position: [0, WALL_H, 0], rotation: [Math.PI, 0, 0] }));
+    const walls = [];
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2;
+      walls.push({ geometry: Geometry.box(H * 2, WALL_H, 0.3), position: [Math.sin(a) * (H + 0.15), WALL_H / 2, Math.cos(a) * (H + 0.15)], rotation: [0, a, 0] });
+    }
+    this.add(mesh(Geometry.merge(walls), new Material({ color: '#191427' })));
+    this.strips = [];
+    for (const [y, hue] of [[0.06, 0.92], [3.7, 0.52]]) {
+      const parts = [];
+      for (let i = 0; i < 4; i++) { const a = (i * Math.PI) / 2; parts.push({ geometry: Geometry.box(H * 2, 0.08, 0.06), position: [Math.sin(a) * H, y, Math.cos(a) * H], rotation: [0, a, 0] }); }
+      this.strips.push({ node: this.add(mesh(Geometry.merge(parts), new Material({ color: '#000', emissive: hsl(hue, 1, 0.55) }))), hue });
+    }
+    const panels = [];
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (i || j) panels.push({ geometry: Geometry.box(1.6, 0.05, 0.4), position: [i * H * 0.55, WALL_H - 0.03, j * H * 0.55] });
+    this.add(mesh(Geometry.merge(panels), new Material({ color: '#000', emissive: '#d8d0ff', emissiveIntensity: 0.55 })));
+    this.add(mesh(Geometry.quad(4.4, 1.1), new Material({ map: sign, unlit: true }), { position: [0, 3.05, -H + 0.02] }));
+
+    // centerpiece
+    this.add(mesh(Geometry.cylinder(0.8, 0.95, 0.6, 24), new Material({ color: '#1a1526' }), { position: [0, 0.3, 0] }));
+    this.ring = this.add(mesh(Geometry.cylinder(0.97, 0.97, 0.06, 32, false), new Material({ color: '#000', emissive: '#ff3fb0', doubleSided: true }), { position: [0, 0.3, 0] }));
+    this.gemMat = new Material({ color: '#ffffff', emissive: [1, 0.3, 0.7], emissiveIntensity: 0.7 });
+    this.gem = this.add(mesh(Geometry.gem(0.42), this.gemMat, { position: [0, 1.5, 0], scale: [1, 1.5, 1] }));
+    this.orbit = this.add(new Node({ position: [0, 1.5, 0] }));
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      this.orbit.add(mesh(Geometry.box(0.12, 0.12, 0.12), new Material({ color: '#000', emissive: hsl(i / 8, 1, 0.6) }), { position: [Math.cos(a) * 1.1, Math.sin(a * 2) * 0.2, Math.sin(a) * 1.1] }));
+    }
+    this.centerLight = { position: { x: 0, y: 2.2, z: 0 }, color: [1, 0.4, 0.8], intensity: 1.2, range: 6 };
+    this.env.lights.push(this.centerLight);
+
+    // cabinets, spread around a circle facing the middle
+    this.cabs = games.map((gm, i) => {
+      const angle = (i / games.length) * Math.PI * 2 + Math.PI / games.length;
+      const cab = buildCabinet(gm, angle, R);
+      this.add(cab.group);
+      this.env.lights.push(cab.light);
+      drawScreen(cab.screenTex, gm, 0, false);
+      return cab;
+    });
+    this.colliders = [
+      { x: 0, z: -H - 0.5, w: H * 2 + 2, d: 1 }, { x: 0, z: H + 0.5, w: H * 2 + 2, d: 1 },
+      { x: -H - 0.5, z: 0, w: 1, d: H * 2 + 2 }, { x: H + 0.5, z: 0, w: 1, d: H * 2 + 2 },
+      { x: 0, z: 0, w: 1.9, d: 1.9 }, ...this.cabs.map((c) => c.box),
+    ];
+
+    this.pos = { x: 0, z: R * 0.55 };
+    this.yaw = 0; this.pitch = -0.05; this.vel = { x: 0, z: 0 };
+    this.step = 0; this.stepSfx = 0;
+    this.state = 'walk';
+    this.focus = null;
+    this.look = { dx: 0, dy: 0 };
+    this.stick = null;
+    this.screenClock = 0;
+    this.hintAlpha = 1;
+    this.placeCamera(0);
+    this.attachPointer();
+  }
+  exit() { this.detachPointer(); }
+
+  // drag to look (mouse, or right side of a touch screen); left side of a touch screen is a joystick
+  attachPointer() {
+    const el = this.game.canvas, ptrs = new Map();
+    this._down = (e) => {
+      const p = this.game.toLogical(e.clientX, e.clientY);
+      const role = e.pointerType === 'touch' && p.x < this.width * 0.45 ? 'move' : 'look';
+      ptrs.set(e.pointerId, { role, sx: p.x, sy: p.y, x: p.x, y: p.y, travel: 0 });
+      if (role === 'move') this.stick = { x: p.x, y: p.y, dx: 0, dy: 0 };
+    };
+    this._move = (e) => {
+      const s = ptrs.get(e.pointerId); if (!s) return;
+      const p = this.game.toLogical(e.clientX, e.clientY);
+      s.travel += Math.hypot(p.x - s.x, p.y - s.y);
+      if (s.role === 'look') { this.look.dx += p.x - s.x; this.look.dy += p.y - s.y; }
+      else if (this.stick) { this.stick.dx = clamp(p.x - s.sx, -50, 50); this.stick.dy = clamp(p.y - s.sy, -50, 50); }
+      s.x = p.x; s.y = p.y;
+    };
+    this._up = (e) => {
+      const s = ptrs.get(e.pointerId); if (!s) return;
+      ptrs.delete(e.pointerId);
+      if (s.role === 'move') this.stick = null;
+      else if (s.travel < 8) this.tapped = true;
+    };
+    el.addEventListener('pointerdown', this._down);
+    addEventListener('pointermove', this._move);
+    addEventListener('pointerup', this._up);
+    addEventListener('pointercancel', this._up);
+  }
+  detachPointer() {
+    const el = this.game.canvas;
+    el.removeEventListener('pointerdown', this._down);
+    removeEventListener('pointermove', this._move); removeEventListener('pointerup', this._up); removeEventListener('pointercancel', this._up);
+  }
+
+  placeCamera(bob) {
+    const c = this.camera;
+    c.position.set(this.pos.x, 1.62 + bob, this.pos.z);
+    c.setYawPitch(this.yaw, this.pitch);
+  }
+
+  update(dt) {
+    const t = this.time;
+    // ambience
+    this.gem.rotation.y += dt * 1.2; this.gem.position.y = 1.5 + Math.sin(t * 1.6) * 0.12;
+    this.orbit.rotation.y -= dt * 0.8; this.orbit.rotation.z = Math.sin(t * 0.7) * 0.2;
+    const hue = (t * 0.05) % 1;
+    this.gemMat.emissive = hsl(hue, 1, 0.55); this.centerLight.color = hsl(hue, 1, 0.6);
+    this.ring.material.emissive = hsl((hue + 0.5) % 1, 1, 0.55);
+    for (const s of this.strips) s.node.material.emissive = hsl((s.hue + t * 0.03) % 1, 1, 0.5 + Math.sin(t * 2 + s.hue * 9) * 0.06);
+    if (Math.random() < dt * 10) this.particles.emit({ x: 0, y: 1.5, z: 0 }, { count: 1, speed: [0.4, 1.2], velocity: { x: 0, y: 0.9, z: 0 }, life: [1.2, 2], size: [0.03, 0.07], color: ['#ff3fb0', '#29e3ff', '#ffd23f'], gravity: 0.6 });
+
+    this.screenClock -= dt;
+    if (this.screenClock <= 0) {
+      this.screenClock = 1 / 12;
+      for (const c of this.cabs) if (Math.hypot(c.front.x - this.pos.x, c.front.z - this.pos.z) < 14) drawScreen(c.screenTex, c.gm, t, c === this.focus);
+    }
+    for (const c of this.cabs) {
+      const on = c === this.focus;
+      c.glow.material.opacity = damp(c.glow.material.opacity, on ? 0.5 + Math.sin(t * 6) * 0.08 : 0.18, 10, dt);
+      c.light.intensity = damp(c.light.intensity, on ? 1.9 : 1.1, 10, dt);
+    }
+
+    if (this.state !== 'walk') { this.tapped = false; this.look.dx = this.look.dy = 0; return; }
+    const input = this.input;
+    this.camera.fov = this.width < this.height ? 88 : 70;
+    this.hintAlpha = Math.max(0, this.hintAlpha - dt / 12);
+
+    // look
+    this.yaw += this.look.dx * 0.0045 + input.axis('turnL', 'turnR') * 2.2 * dt;
+    this.pitch = clamp(this.pitch - this.look.dy * 0.0035, -1.1, 1.1);
+    this.look.dx = this.look.dy = 0;
+
+    // move
+    let f = input.axis('back', 'fwd') - input.stick.y, s = input.axis('strafeL', 'strafeR') + input.stick.x;
+    if (this.stick) { f -= this.stick.dy / 50; s += this.stick.dx / 50; }
+    const len = Math.hypot(f, s);
+    if (len > 1) { f /= len; s /= len; }
+    const speed = 3.4, fx = Math.sin(this.yaw), fz = -Math.cos(this.yaw), rx = Math.cos(this.yaw), rz = Math.sin(this.yaw);
+    this.vel.x = damp(this.vel.x, (fx * f + rx * s) * speed, 12, dt);
+    this.vel.z = damp(this.vel.z, (fz * f + rz * s) * speed, 12, dt);
+    Collide3D.slideXZ(this.pos, 0.35, this.vel.x * dt, this.vel.z * dt, this.colliders);
+    const moving = Math.hypot(this.vel.x, this.vel.z);
+    this.step += moving * dt * 2.6;
+    if (moving > 1 && Math.floor(this.step / Math.PI) !== this.stepSfx) { this.stepSfx = Math.floor(this.step / Math.PI); this.audio.noise({ dur: 0.05, vol: 0.05, freq: 500 }); }
+    this.placeCamera(Math.abs(Math.sin(this.step)) * 0.045 * Math.min(1, moving / 2));
+
+    // which cabinet am I looking at?
+    let best = null, bestScore = 0;
+    for (const c of this.cabs) {
+      const dx = c.screen.x - this.pos.x, dz = c.screen.z - this.pos.z, d = Math.hypot(dx, dz);
+      if (d > 2.6) continue;
+      const facing = (dx * fx + dz * fz) / d, front = -(dx * c.normal.x + dz * c.normal.z) / d;
+      const score = facing * 0.7 + front * 0.3 - d * 0.1;
+      if (facing > 0.55 && front > 0.2 && score > bestScore) { best = c; bestScore = score; }
+    }
+    if (best !== this.focus) { this.focus = best; if (best) this.audio.sfx('blip'); }
+    if (this.focus && (input.pressed('play') || this.tapped)) this.launch(this.focus);
+    this.tapped = false;
+  }
+
+  launch(cab) {
+    this.state = 'zoom';
+    this.saved = { x: this.pos.x, z: this.pos.z, yaw: this.yaw, pitch: this.pitch };
+    this.audio.sfx('powerup');
+    this.particles.emit(cab.screen, { count: 40, speed: [1, 3], life: [0.4, 0.9], color: [cab.gm.color, '#ffffff'], size: [0.03, 0.08] });
+    const cam = this.camera, from = cam.position.clone(), fromT = cam.target.clone();
+    const to = { x: cab.screen.x + cab.normal.x * 0.85, y: cab.screen.y + 0.02, z: cab.screen.z + cab.normal.z * 0.85 };
+    const o = { t: 0 };
+    this.tweens.to(o, { t: 1 }, 0.75, {
+      ease: 'inOutCubic',
+      onUpdate: () => {
+        cam.position.set(lerp(from.x, to.x, o.t), lerp(from.y, to.y, o.t), lerp(from.z, to.z, o.t));
+        cam.target.set(lerp(fromT.x, cab.screen.x, o.t), lerp(fromT.y, cab.screen.y, o.t), lerp(fromT.z, cab.screen.z, o.t));
+      },
+      onDone: () => openGame(cab.gm),
+    });
+  }
+  returnFromGame() {
+    const cam = this.camera, from = cam.position.clone(), fromT = cam.target.clone(), s = this.saved;
+    const endT = { x: s.x + Math.sin(s.yaw) * Math.cos(s.pitch), y: 1.62 + Math.sin(s.pitch), z: s.z - Math.cos(s.yaw) * Math.cos(s.pitch) };
+    const o = { t: 0 };
+    this.state = 'zoom';
+    this.tweens.to(o, { t: 1 }, 0.6, {
+      ease: 'inOutCubic',
+      onUpdate: () => {
+        cam.position.set(lerp(from.x, s.x, o.t), lerp(from.y, 1.62, o.t), lerp(from.z, s.z, o.t));
+        cam.target.set(lerp(fromT.x, endT.x, o.t), lerp(fromT.y, endT.y, o.t), lerp(fromT.z, endT.z, o.t));
+      },
+      onDone: () => { this.state = 'walk'; this.pos.x = s.x; this.pos.z = s.z; this.yaw = s.yaw; this.pitch = s.pitch; },
+    });
+  }
+
+  drawUI(ctx) {
+    const W = this.width, H = this.height;
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ font: 'ui-monospace, Menlo, Consolas, monospace', shadow: 'rgba(0,0,0,.7)', shadowOffset: 1 }, o));
+    if (this.state === 'walk') {
+      ctx.fillStyle = this.focus ? this.focus.gm.color : 'rgba(255,255,255,.7)';
+      ctx.beginPath(); ctx.arc(W / 2, H / 2, this.focus ? 4 : 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+    if (this.focus && this.state === 'walk') {
+      const g = this.focus.gm, cw = Math.min(420, W - 32), cx = W / 2 - cw / 2, cy = H - 128;
+      ctx.fillStyle = 'rgba(16,12,26,.88)'; ctx.fillRect(cx, cy, cw, 96);
+      ctx.fillStyle = g.color; ctx.fillRect(cx, cy, 4, 96);
+      t(g.title, cx + 18, cy + 12, { size: 20, weight: '700', color: g.color });
+      t(g.tagline || '', cx + 18, cy + 38, { size: 13, color: '#e8e0f4' });
+      t(g.controls || '', cx + 18, cy + 56, { size: 12, color: '#a79cc0' });
+      t(isTouch() ? 'tap to play' : 'press E or Enter to play', cx + 18, cy + 74, { size: 13, weight: '700', color: '#ffd23f' });
+    }
+    if (this.hintAlpha > 0 && this.state === 'walk') {
+      const msg = isTouch() ? 'left thumb walks · right thumb looks · tap a cabinet' : 'WASD / arrows walk · drag mouse to look · E to play';
+      t(msg, W / 2, H - (this.focus ? 150 : 40), { size: clamp(W / 32, 10, 13), align: 'center', color: '#ffffff', alpha: Math.min(1, this.hintAlpha * 3) });
+    }
+    if (this.stick) {
+      ctx.globalAlpha = 0.35; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(this.stick.x, this.stick.y, 50, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 0.6; ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(this.stick.x + this.stick.dx, this.stick.y + this.stick.dy, 20, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+// ── DOM: playing a game, the game list, adding games ──
+let arcade = null;
+const player = $('player'), frame = $('frame');
+
+function openGame(gm) {
+  closePanels();
+  $('playTitle').textContent = gm.title.toUpperCase();
+  $('playTitle').style.color = gm.color;
+  player.style.setProperty('--accent', gm.color);
+  frame.src = gm.path;
+  player.hidden = false;
+  game.stop();
+  frame.addEventListener('load', () => { try { frame.contentWindow.focus(); } catch (e) { /* other site */ } }, { once: true });
+}
+function closeGame() {
+  if (player.hidden) return;
+  player.hidden = true;
+  frame.src = 'about:blank';
+  game.start();
+  if (arcade && arcade.state === 'zoom') arcade.returnFromGame();
+}
+$('backBtn').addEventListener('click', closeGame);
+
+const panels = [$('listPanel'), $('addPanel')];
+function closePanels() { panels.forEach((p) => (p.hidden = true)); if (arcade && arcade.state === 'menu') arcade.state = 'walk'; }
+function openPanel(p) {
+  closePanels(); p.hidden = false;
+  if (arcade && arcade.state === 'walk') arcade.state = 'menu';
+  const first = p.querySelector('input, button'); if (first) first.focus();
+}
+document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closePanels));
+addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!player.hidden) closeGame(); else if (panels.some((p) => !p.hidden)) closePanels();
+});
+
+function renderList() {
+  const list = $('gameList');
+  list.innerHTML = '';
+  allGames().forEach((g) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<span class="dot"></span><div><b></b><small></small></div><div class="acts"></div>';
+    row.querySelector('.dot').style.color = g.color;
+    row.querySelector('b').textContent = g.title;
+    row.querySelector('small').textContent = g.tagline || g.path;
+    const acts = row.querySelector('.acts');
+    const play = document.createElement('button'); play.type = 'button'; play.textContent = 'Play';
+    play.addEventListener('click', () => { if (arcade) { arcade.saved = { x: arcade.pos.x, z: arcade.pos.z, yaw: arcade.yaw, pitch: arcade.pitch }; arcade.state = 'zoom'; } openGame(g); });
+    acts.appendChild(play);
+    if (g.custom) {
+      const rm = document.createElement('button'); rm.type = 'button'; rm.textContent = 'Remove';
+      rm.addEventListener('click', () => {
+        store.set(CUSTOM_KEY, store.get(CUSTOM_KEY, []).filter((c) => !(c.title === g.title && c.path === g.path)));
+        renderList(); rebuild();
+      });
+      acts.appendChild(rm);
+    }
+    list.appendChild(row);
+  });
+}
+$('listBtn').addEventListener('click', () => { renderList(); openPanel($('listPanel')); });
+$('addBtn').addEventListener('click', () => { $('fErr').textContent = ''; openPanel($('addPanel')); });
+$('addForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const title = $('fTitle').value.trim(), path = $('fPath').value.trim();
+  if (!title || !path) { $('fErr').textContent = 'Give the game a name and an address.'; return; }
+  if (/^\s*javascript:/i.test(path)) { $('fErr').textContent = 'That address type isn\'t allowed. Use a folder path or an https:// address.'; return; }
+  const custom = store.get(CUSTOM_KEY, []);
+  custom.push({ title, path, color: $('fColor').value, tagline: $('fTag').value.trim(), controls: $('fControls').value.trim() });
+  if (!store.set(CUSTOM_KEY, custom)) { $('fErr').textContent = 'This browser won\'t let the arcade save. Add the game to games.js instead.'; return; }
+  e.target.reset();
+  closePanels();
+  rebuild();
+});
+
+function updateSoundBtn() { $('soundBtn').textContent = game.audio.muted ? 'Sound off' : 'Sound on'; }
+$('soundBtn').addEventListener('click', () => { game.audio.unlock(); game.audio.toggleMute(); updateSoundBtn(); });
+updateSoundBtn();
+
+function rebuild() { arcade = new Arcade(); game.switch(arcade, { fade: 0.5 }); }
+arcade = new Arcade();
+game.start(arcade);
+window.flintArcade = { game, get scene() { return arcade; }, openGame, closeGame };
+</script>
+</body>
+</html>

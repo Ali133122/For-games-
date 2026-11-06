@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Orb Rush</title>
+<style>html, body { margin: 0; height: 100%; background: #12061f; overflow: hidden; }</style>
+</head>
+<body>
+<script src="../flint/flint.js"></script>
+<script src="../flint/flint3d.js"></script>
+<script>
+'use strict';
+// Orb Rush: a neon 3D lane runner built with Flint3D.
+const { Game3D, Scene3D, Geometry, Texture, Material, Node, mesh, Collide3D } = Flint3D;
+const { text, store, damp, rand, pick, clamp } = Flint;
+
+const game = new Game3D({ touchButtons: [] });
+const LANES = [-2.2, 0, 2.2], SEG = 20, SEGMENTS = 9, R = 0.45;
+
+// ── shared art ──
+const gridTex = Texture.canvas(128, 128, (g, w, h) => {
+  g.fillStyle = '#1a0b2e'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#ff3fb0'; g.lineWidth = 3; g.globalAlpha = 0.7;
+  g.strokeRect(0, 0, w, h);
+}, { repeat: true });
+const skyTex = Texture.canvas(512, 256, (g, w, h) => {
+  const sky = g.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, '#12061f'); sky.addColorStop(0.65, '#3a0d4f'); sky.addColorStop(1, '#ff3fb0');
+  g.fillStyle = sky; g.fillRect(0, 0, w, h);
+  const sun = g.createLinearGradient(0, 40, 0, 220);
+  sun.addColorStop(0, '#ffe36b'); sun.addColorStop(1, '#ff4f8b');
+  g.fillStyle = sun; g.beginPath(); g.arc(w / 2, 170, 95, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#3a0d4f';
+  for (let i = 0; i < 7; i++) g.fillRect(0, 150 + i * 14, w, 2 + i * 1.5);
+  g.fillStyle = '#12061f';
+  g.beginPath(); g.moveTo(0, h);
+  for (let x = 0; x <= w; x += 16) g.lineTo(x, 215 - Math.abs(Math.sin(x * 0.03)) * 40 - (x % 48 === 0 ? 12 : 0));
+  g.lineTo(w, h); g.fill();
+});
+
+const segmentGeo = Geometry.merge([
+  { geometry: Geometry.box(0.15, 0.15, SEG), position: [-3.4, 0.08, 0] },
+  { geometry: Geometry.box(0.15, 0.15, SEG), position: [3.4, 0.08, 0] },
+  { geometry: Geometry.box(0.05, 0.02, SEG), position: [-1.1, 0.01, 0] },
+  { geometry: Geometry.box(0.05, 0.02, SEG), position: [1.1, 0.01, 0] },
+]);
+const floorGeo = Geometry.plane(6.8, SEG, 3, SEG / 2.2);
+const tallGeo = Geometry.box(1.7, 1.6, 0.9), lowGeo = Geometry.box(1.9, 0.5, 0.6), gemGeo = Geometry.gem(0.32);
+const orbGeo = Geometry.sphere(R, 20, 14);
+const M = {
+  rail: new Material({ color: '#000', emissive: '#ff3fb0' }),
+  floor: new Material({ map: gridTex, color: '#ffffff', unlit: true }),
+  tall: new Material({ color: '#2a1140', emissive: '#7a2cff', emissiveIntensity: 0.55 }),
+  low: new Material({ color: '#3a1020', emissive: '#ff7a2c', emissiveIntensity: 0.6 }),
+  gem: new Material({ color: '#ffe36b', emissive: '#ffb21f', emissiveIntensity: 0.6 }),
+  orb: new Material({ color: '#bff9ff', emissive: '#29e3ff', emissiveIntensity: 0.55 }),
+  sky: new Material({ map: skyTex, unlit: true, fog: false }),
+};
+
+class Run extends Scene3D {
+  enter() {
+    Object.assign(this.env, { background: '#2a0b3e', fog: [18, 70], fogColor: '#2a0b3e', sky: '#6a4c9c', ground: '#1a0b2e', sunDir: [0.3, -1, -0.5], sunIntensity: 0.5 });
+    this.camera.fov = 68; this.camera.far = 140;
+    this.best = store.get('orbrush:best', 0);
+    this.sky = this.add(mesh(Geometry.quad(440, 110), M.sky, { position: [0, 22, -110] }));
+    this.segments = [];
+    for (let i = 0; i < SEGMENTS; i++) {
+      const s = this.add(new Node({ position: [0, 0, -i * SEG + SEG / 2] }));
+      s.add(mesh(floorGeo, M.floor), mesh(segmentGeo, M.rail));
+      this.segments.push(s);
+    }
+    this.orb = this.add(mesh(orbGeo, M.orb, { position: [0, R, 0] }));
+    this.light = { position: { x: 0, y: 1.2, z: 0 }, color: '#29e3ff', intensity: 1.6, range: 7 };
+    this.env.lights.push(this.light);
+    this.things = [];
+    this.reset();
+    this.state = 'ready';
+  }
+  reset() {
+    for (const t of this.things) t.node.destroy();
+    this.things = [];
+    this.lane = 1; this.x = 0; this.z = 0; this.y = 0; this.vy = 0;
+    this.speed = 13; this.dist = 0; this.gems = 0; this.nextRow = -40;
+    this.orb.visible = true;
+    this.segments.forEach((s, i) => (s.position.z = -i * SEG + SEG / 2));
+    this.spawnAhead();
+  }
+  get score() { return Math.floor(this.dist) + this.gems * 10; }
+  spawnAhead() {
+    while (this.nextRow > this.z - 110) {
+      this.spawnRow(this.nextRow);
+      this.nextRow -= clamp(rand(11, 17) * (this.speed / 16), 10, 26);
+    }
+  }
+  spawnRow(z) {
+    const kinds = ['open', 'open', 'open'];
+    const tall = Math.random() < 0.75 ? (Math.random() < 0.45 ? 2 : 1) : 0;
+    const lanes = Flint.random.shuffle([0, 1, 2]);
+    for (let i = 0; i < tall; i++) kinds[lanes[i]] = 'tall';
+    for (let i = tall; i < 3; i++) if (Math.random() < (tall ? 0.35 : 0.7)) kinds[lanes[i]] = 'low';
+    if (!kinds.includes('open') && !kinds.includes('low')) kinds[lanes[2]] = 'low';
+    kinds.forEach((k, i) => {
+      if (k === 'tall') this.addThing('tall', mesh(tallGeo, M.tall, { position: [LANES[i], 0.8, z] }), 1.7, 1.6, 0.9);
+      if (k === 'low') this.addThing('low', mesh(lowGeo, M.low, { position: [LANES[i], 0.25, z] }), 1.9, 0.5, 0.6);
+    });
+    // a trail of gems through a safe lane, arcing over low walls
+    const safe = kinds.map((k, i) => (k !== 'tall' ? i : -1)).filter((i) => i >= 0);
+    if (safe.length && Math.random() < 0.8) {
+      const lane = pick(safe), n = 3 + Math.floor(Math.random() * 3);
+      for (let j = 0; j < n; j++) {
+        const dz = (j - (n - 1) / 2) * 1.6, arc = kinds[lane] === 'low' ? 1.3 * Math.cos((dz / (n * 0.9)) * Math.PI / 2) + 0.6 : 0.6;
+        this.addThing('gem', mesh(gemGeo, M.gem, { position: [LANES[lane], arc, z + dz] }), 0.6, 0.6, 0.6);
+      }
+    }
+  }
+  addThing(kind, node, w, h, d) { this.add(node); this.things.push({ kind, node, w, h, d }); }
+
+  move(dir) {
+    const l = clamp(this.lane + dir, 0, 2);
+    if (l !== this.lane) { this.lane = l; this.audio.tone({ freq: dir > 0 ? 520 : 440, dur: 0.06, type: 'triangle', vol: 0.08 }); }
+  }
+  jump() {
+    if (this.y > 0.01) return;
+    this.vy = 9.5; this.audio.sfx('jump');
+    this.particles.emit({ x: this.x, y: 0.1, z: this.z }, { count: 10, speed: [1, 3], life: [0.2, 0.4], color: ['#29e3ff', '#bff9ff'], size: [0.05, 0.12] });
+  }
+  swipe() {
+    const p = this.input.pointer;
+    if (p.pressed) { this.sw = { x: p.x, y: p.y, moved: false }; }
+    if (p.down && this.sw) {
+      const dx = p.x - this.sw.x, dy = p.y - this.sw.y;
+      if (Math.abs(dx) > 35 && Math.abs(dx) > Math.abs(dy)) { this.move(Math.sign(dx)); this.sw = { x: p.x, y: p.y, moved: true }; }
+      else if (dy < -35) { this.jump(); this.sw = { x: p.x, y: p.y, moved: true }; }
+    }
+    if (p.released && this.sw) { if (!this.sw.moved) this.tapped = true; this.sw = null; }
+  }
+
+  update(dt) {
+    const input = this.input;
+    this.tapped = false;
+    this.swipe();
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.state !== 'run') {
+      if (this.state === 'ready') { this.orb.position.y = R + Math.abs(Math.sin(this.time * 3)) * 0.3; this.orb.rotation.x -= dt * 2; }
+      const go = input.pressed('jump') || input.pressed('Enter') || this.tapped;
+      if (go && (this.state === 'ready' || this.time - this.deadAt > 0.8)) {
+        if (this.state === 'dead') this.reset();
+        this.state = 'run'; this.audio.sfx('select');
+      }
+      this.placeCamera(dt);
+      return;
+    }
+
+    if (input.pressed('left')) this.move(-1);
+    if (input.pressed('right')) this.move(1);
+    if (input.pressed('jump') || input.pressed('up') || this.tapped) this.jump();
+    if (input.down('down') && this.y > 0) this.vy -= 50 * dt;
+
+    this.speed = Math.min(34, this.speed + dt * 0.35);
+    this.z -= this.speed * dt; this.dist += this.speed * dt;
+    this.x = damp(this.x, LANES[this.lane], 16, dt);
+    this.vy -= 28 * dt; this.y = Math.max(0, this.y + this.vy * dt);
+    if (this.y === 0 && this.vy < 0) this.vy = 0;
+    const o = this.orb;
+    o.position.set(this.x, R + this.y, this.z);
+    o.rotation.x -= (this.speed / R) * dt;
+    o.rotation.z = (LANES[this.lane] - this.x) * 0.25;
+    this.light.position = { x: this.x, y: 1.2 + this.y, z: this.z };
+    if (Math.random() < 0.6) this.particles.emit({ x: this.x, y: R + this.y, z: this.z + 0.4 }, { count: 1, speed: [0.2, 0.8], life: [0.2, 0.5], color: ['#29e3ff', '#ff3fb0'], size: [0.05, 0.1] });
+
+    const ball = { x: this.x, y: R + this.y, z: this.z, r: R * 0.9 };
+    for (const t of this.things) {
+      const n = t.node;
+      if (t.kind === 'gem') n.rotation.y += dt * 3;
+      if (Math.abs(n.position.z - this.z) > 2) continue;
+      if (!Collide3D.sphereBox(ball, { x: n.position.x, y: n.position.y, z: n.position.z, w: t.w, h: t.h, d: t.d })) continue;
+      if (t.kind === 'gem') {
+        t.dead = true; n.destroy(); this.gems++;
+        this.audio.sfx('coin');
+        this.particles.emit(n.position, { count: 14, speed: [1.5, 4], color: ['#ffe36b', '#ffb21f', '#fff'], life: [0.3, 0.6] });
+      } else return this.crash();
+    }
+    this.things = this.things.filter((t) => !t.dead && (t.node.position.z < this.z + 8 || (t.node.destroy(), false)));
+    for (const s of this.segments) if (s.position.z - SEG / 2 > this.z + 10) s.position.z -= SEGMENTS * SEG;
+    this.spawnAhead();
+    this.sky.position.z = this.z - 110;
+    this.placeCamera(dt);
+  }
+  placeCamera(dt) {
+    const c = this.camera;
+    c.position.set(damp(c.position.x, this.x * 0.55, 6, dt), 3.1 + this.y * 0.25, this.z + 6.4);
+    c.lookAt(this.x * 0.35, 0.9, this.z - 7);
+  }
+  crash() {
+    this.state = 'dead'; this.deadAt = this.time;
+    this.orb.visible = false;
+    this.camera.shake(0.35, 0.5);
+    this.audio.sfx('explode');
+    this.particles.emit(this.orb.position, { count: 70, speed: [2, 9], life: [0.5, 1.2], color: ['#29e3ff', '#bff9ff', '#ff3fb0', '#ffe36b'], size: [0.08, 0.22], gravity: 9 });
+    if (this.score > this.best) { this.best = this.score; this.newBest = true; store.set('orbrush:best', this.best); } else this.newBest = false;
+  }
+
+  drawUI(ctx) {
+    const W = this.width, H = this.height, big = Math.min(W / 10, 64);
+    const t = (s, x, y, size, color, align = 'center', alpha) => text(ctx, s, x, y, { size, color, align, alpha, shadow: 'rgba(0,0,0,.6)', shadowOffset: 2, font: 'ui-monospace, Menlo, Consolas, monospace', weight: '700' });
+    if (this.state === 'run' || this.state === 'dead') {
+      t(String(this.score), W / 2, 16, Math.max(22, big * 0.6), '#ffffff');
+      t(`◆ ${this.gems}`, 16, 18, 16, '#ffe36b', 'left');
+      t(`${Math.round(this.speed * 3.6)} km/h`, W - 16, 18, 14, '#bff9ff', 'right');
+    }
+    if (this.state === 'ready') {
+      t('ORB RUSH', W / 2, H * 0.2, big * 1.3, '#ffe36b');
+      t('dodge the walls · jump the low ones · grab the gems', W / 2, H * 0.2 + big * 1.6, Math.max(12, big * 0.26), '#ffffff');
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to roll', W / 2, H * 0.72, Math.max(14, big * 0.34), '#ffffff');
+      t('←/→ or A/D or swipe: change lane   Space/↑ or tap: jump   ↓ slam down   M mute', W / 2, H * 0.72 + 34, Math.max(11, big * 0.2), '#d8c8ff');
+      if (this.best) t(`best ${this.best}`, W / 2, H * 0.72 + 56, Math.max(12, big * 0.22), '#ffe36b');
+    }
+    if (this.state === 'dead' && this.time - this.deadAt > 0.4) {
+      ctx.fillStyle = 'rgba(18,6,31,.55)'; ctx.fillRect(0, H * 0.3, W, H * 0.34);
+      t('CRASHED', W / 2, H * 0.34, big, '#ff3fb0');
+      t(`score ${this.score}${this.newBest ? '  · new best!' : `   best ${this.best}`}`, W / 2, H * 0.34 + big * 1.2, Math.max(14, big * 0.32), '#ffffff');
+      if (this.time - this.deadAt > 0.8) t('Space or tap to go again', W / 2, H * 0.34 + big * 1.85, Math.max(12, big * 0.26), '#d8c8ff');
+    }
+  }
+}
+
+game.start(new Run());
+window.orbRush = game;
+</script>
+</body>
+</html>

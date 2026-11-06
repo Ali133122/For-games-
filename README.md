@@ -1,10 +1,36 @@
 # For-games-
 A repo for games 
 
+## Flint Arcade
+Open [`index.html`](index.html) in a browser to walk around a 3D neon arcade. Every game in this repo is a cabinet. Walk up to one and press <kbd>E</kbd> (or tap it) to play, and use **← Back to arcade** to return.
+
+- **Walk:** WASD or ↑/↓. **Look:** drag with the mouse, or ←/→ to turn. **Play:** E, Enter or Space
+- **Touch:** your left thumb walks, your right thumb looks, and tapping a cabinet plays it
+- **All games** lists every game with a Play button, if you'd rather skip the walk
+
+**Adding your games:**
+1. Put the game in its own folder with an `index.html` inside, e.g. `my-game/index.html`.
+2. Add an entry to [`games.js`](games.js) with a title, path, neon color, tagline and controls.
+
+The room grows to fit however many cabinets there are. You can also press **+ Add game** inside the arcade to add a cabinet without editing files. Those are saved in your browser only.
+
 ## Flint game engine
-[`flint/flint.js`](flint/flint.js) is a tiny 2D game engine in one file with no dependencies. It covers scenes, entities, tilemaps with collision, a camera, keyboard/mouse/touch/gamepad input, sprites and animation, particles, tweens and synthesized sound. See the [Flint README](flint/README.md) for the guide and API, and [`flint/examples/hello.html`](flint/examples/hello.html) for a 40-line example.
+[`flint/flint.js`](flint/flint.js) is a tiny 2D game engine in one file with no dependencies. It covers scenes, entities, tilemaps with collision, a camera, keyboard/mouse/touch/gamepad input, sprites and animation, particles, tweens and synthesized sound.
+
+[`flint/flint3d.js`](flint/flint3d.js) adds 3D on top of it with WebGL: meshes, lights, fog, glowing materials, canvas textures, a scene graph, 3D particles and collision. The arcade and Orb Rush are built with it.
+
+See the [Flint README](flint/README.md) for the guide and API, and [`flint/examples/hello.html`](flint/examples/hello.html) for a 40-line example.
 
 ## Games
+
+### Orb Rush
+Open [`orb-rush/index.html`](orb-rush/index.html) in a browser. It's a 3D game built with Flint3D.
+
+Roll a glowing orb down a neon highway toward a synthwave sunset. It keeps getting faster.
+
+- **Change lane:** ←/→ or A/D, or swipe. **Jump:** Space or ↑, or tap. **Slam down:** ↓
+- Purple walls must be dodged. Orange walls are low enough to jump. Gems are worth 10 points each
+- Your best score is saved
 
 ### Sparkwood
 Open [`sparkwood/index.html`](sparkwood/index.html) in a browser. It's built with Flint and works offline.

@@ -89,6 +89,21 @@
   .pc span { grid-area: 1 / 1; display: block; transform: translateY(-2%); }
   .pc.w .fill { color: #fffaf0; } .pc.w .line { color: #1f1912; }
   .pc.b .fill { color: #241e19; text-shadow: 0 0 1px rgba(255, 245, 230, .35); }
+  .pc svg { width: 92%; height: 92%; overflow: visible; filter: drop-shadow(0 calc(var(--sq) * .03) calc(var(--sq) * .02) rgba(0, 0, 0, .3)); }
+  .pc svg .bd { stroke-width: 3.2; stroke-linejoin: round; stroke-linecap: round; }
+  .pc.w svg .bd { fill: #fff8ec; stroke: #6b4f36; }
+  .pc.b svg .bd { fill: #44407a; stroke: #221f45; }
+  .pc svg .ac { fill: #ffc93c; stroke: #b7861b; stroke-width: 2.4; stroke-linejoin: round; }
+  .pc.b svg .ac { fill: #ffb547; stroke: #9a6512; }
+  .pc svg .mn { fill: #f39a6b; stroke: #a85a35; stroke-width: 2.2; stroke-linejoin: round; }
+  .pc.b svg .mn { fill: #9f8cf0; stroke: #4b3ea0; }
+  .pc svg .ey { fill: #2d2118; } .pc.b svg .ey { fill: #fffaf0; }
+  .pc svg .hl { fill: #fff; } .pc.b svg .hl { fill: #44407a; }
+  .pc svg .sm { fill: none; stroke: #2d2118; stroke-width: 2.6; stroke-linecap: round; } .pc.b svg .sm { stroke: #fffaf0; }
+  .pc svg .ch { fill: #ff8fa3; opacity: .55; }
+  .mini { display: inline-block; width: 19px; height: 19px; margin-right: -4px; vertical-align: middle; position: relative; }
+  .mini .pc { position: static; width: 100%; height: 100%; }
+  .mini .pc svg { filter: none; }
   .pc .fill { filter: drop-shadow(0 calc(var(--sq) * .03) calc(var(--sq) * .02) rgba(0, 0, 0, .35)); }
   .pc.anim { transition: left .2s cubic-bezier(.3, .7, .3, 1), top .2s cubic-bezier(.3, .7, .3, 1); }
   .pc.drag { z-index: 10; transform: scale(1.12); transition: none; }
@@ -237,6 +252,7 @@
     </div>
     <div class="card settings">
       <div class="setrow"><span>Board</span><div class="swatches" id="swatches"></div></div>
+      <div class="setrow"><span>Pieces</span><div class="swatches"><button class="toggle" id="pcFriendly">Friendly</button><button class="toggle" id="pcClassic">Classic</button></div></div>
       <div class="setrow"><span>Evaluation bar</span><button class="toggle" id="evalTog">On</button></div>
       <div class="setrow"><span>Sound</span><button class="toggle" id="soundTog">On</button></div>
       <div class="keys" id="keys"><kbd>←</kbd> <kbd>→</kbd> step through moves · <kbd>H</kbd> hint · <kbd>U</kbd> undo · <kbd>F</kbd> flip</div>
@@ -690,7 +706,7 @@ function ChessCore() {
   const BOARDS = { walnut: ['#f0d9b5', '#b58863'], sage: ['#eeeed2', '#769656'], slate: ['#dee3e6', '#7d97a6'], rose: ['#f4e1dc', '#b9776e'] };
 
   // ---------- Settings & state ----------
-  const S = { mode: 'ai', side: '0', human: 0, level: 2, flipped: false, board: 'walnut', sound: true, evalOn: true };
+  const S = { mode: 'ai', side: '0', human: 0, level: 2, flipped: false, board: 'walnut', sound: true, evalOn: true, pieces: 'friendly' };
   let pos = new Core.Pos(), startFen = Core.START;
   let hist = [];     // {m, san, uci}
   let fens = [startFen];
@@ -1728,11 +1744,42 @@ function ChessCore() {
   function sizeVars() { const w = wrap.clientWidth / 8; document.documentElement.style.setProperty('--sq', w + 'px'); }
   new ResizeObserver(sizeVars).observe(wrap);
 
+  // Friendly cartoon pieces (viewBox 0 0 100 100)
+  const face = (x, y, k = 1) => `<circle class="ch" cx="${x - 14 * k}" cy="${y + 7 * k}" r="${4 * k}"/><circle class="ch" cx="${x + 14 * k}" cy="${y + 7 * k}" r="${4 * k}"/>` +
+    `<circle class="ey" cx="${x - 7.5 * k}" cy="${y}" r="${4 * k}"/><circle class="ey" cx="${x + 7.5 * k}" cy="${y}" r="${4 * k}"/>` +
+    `<circle class="hl" cx="${x - 6.2 * k}" cy="${y - 1.5 * k}" r="${1.4 * k}"/><circle class="hl" cx="${x + 8.8 * k}" cy="${y - 1.5 * k}" r="${1.4 * k}"/>` +
+    `<path class="sm" d="M${x - 6 * k} ${y + 7 * k} Q${x} ${y + 13 * k} ${x + 6 * k} ${y + 7 * k}"/>`;
+  const base = '<rect class="bd" x="22" y="80" width="56" height="12" rx="6"/>';
+  const FRIENDLY = [null,
+    // pawn: round little buddy
+    base + '<path class="bd" d="M31 82 Q31 62 50 60 Q69 62 69 82 Z"/><circle class="bd" cx="50" cy="44" r="19"/>' + face(50, 44, .85),
+    // knight: smiling pony
+    base + '<path class="bd" d="M70 82 H30 Q29 68 38 60 Q27 59 22 52 Q18 45 24 39 L39 27 Q42 17 52 15 L55 7 Q60 9 61 17 Q76 25 76 46 Q76 66 70 82 Z"/>' +
+      '<path class="mn" d="M61 17 Q77 25 77 46 Q77 64 71 80 Q66 64 66 46 Q66 30 58 20 Z"/>' +
+      '<circle class="ey" cx="45" cy="35" r="4.2"/><circle class="hl" cx="46.4" cy="33.4" r="1.5"/><circle class="ch" cx="40" cy="46" r="4"/>' +
+      '<circle class="ey" cx="27" cy="45" r="1.8"/><path class="sm" d="M27 52 Q33 56 38 52"/>',
+    // bishop: tall pointy hat
+    base + '<path class="bd" d="M50 18 C69 34 71 52 67 64 Q63 76 67 82 H33 Q37 76 33 64 C29 52 31 34 50 18 Z"/><circle class="ac" cx="50" cy="14" r="6"/>' +
+      '<path class="ac" d="M36 40 Q50 46 64 40 L66 46 Q50 53 34 46 Z"/>' + face(50, 60, .9),
+    // rook: cheerful castle tower
+    base + '<path class="bd" d="M29 82 L33 42 H67 L71 82 Z"/><path class="bd" d="M26 44 V20 H37 V29 H45 V20 H55 V29 H63 V20 H74 V44 Z"/>' +
+      '<rect class="ac" x="45" y="68" width="10" height="12" rx="5"/>' + face(50, 54, .9),
+    // queen: pearl crown
+    base + '<path class="bd" d="M24 82 Q34 72 39 62 Q42 57 50 57 Q58 57 61 62 Q66 72 76 82 Z"/>' +
+      '<circle class="ac" cx="40" cy="64" r="2.6"/><circle class="ac" cx="45" cy="66.5" r="2.6"/><circle class="ac" cx="50" cy="67.5" r="2.6"/><circle class="ac" cx="55" cy="66.5" r="2.6"/><circle class="ac" cx="60" cy="64" r="2.6"/>' +
+      '<circle class="bd" cx="50" cy="42" r="17"/>' +
+      '<path class="ac" d="M34 30 L36 13 L43 22 L50 8 L57 22 L64 13 L66 30 Q50 25 34 30 Z"/>' +
+      '<circle class="ac" cx="36" cy="12" r="3.2"/><circle class="ac" cx="50" cy="7" r="3.2"/><circle class="ac" cx="64" cy="12" r="3.2"/>' + face(50, 43, .85),
+    // king: big crown with a star
+    base + '<path class="bd" d="M25 82 Q25 50 50 41 Q75 50 75 82 Z"/><circle class="bd" cx="50" cy="50" r="21"/>' +
+      '<path class="ac" d="M29 34 V18 L39 25 L50 15 L61 25 L71 18 V34 Q50 28 29 34 Z"/>' +
+      '<path class="ac" d="M50 1 L52.6 6.8 L58.8 7.2 L54 11.2 L55.6 17.2 L50 13.9 L44.4 17.2 L46 11.2 L41.2 7.2 L47.4 6.8 Z"/>' + face(50, 52)];
+  const friendlySVG = t => `<svg viewBox="0 0 100 100" aria-hidden="true">${FRIENDLY[t]}</svg>`;
   function pieceEl(p) {
     const el = document.createElement('div');
     const white = !(p >> 3), t = p & 7;
     el.className = 'pc ' + (white ? 'w' : 'b');
-    el.innerHTML = white
+    el.innerHTML = S.pieces === 'friendly' ? friendlySVG(t) : white
       ? `<span class="fill">${GLYPH[t]}${VS}</span><span class="line">${OUTLINE[t]}${VS}</span>`
       : `<span class="fill">${GLYPH[t]}${VS}</span>`;
     return el;
@@ -1819,6 +1866,10 @@ function ChessCore() {
     for (let s = 0; s < 120; s++) { if (s & 0x88) { s += 7; continue; } const q = p.b[s]; if (q) { have[q >> 3][q & 7]++; mat[q >> 3] += V[q & 7]; } }
     const capsBy = col => { // pieces of the opponent that `col` has captured
       const o = col ^ 1; let s = '';
+      if (S.pieces === 'friendly') {
+        for (const t of [5, 4, 3, 2, 1]) { const n = Math.max(0, cnt[o][t] - have[o][t]); for (let i = 0; i < n; i++) s += `<span class="mini"><span class="pc ${o ? 'b' : 'w'}">${friendlySVG(t)}</span></span>`; }
+        return s;
+      }
       for (const t of [5, 4, 3, 2, 1]) { const n = Math.max(0, cnt[o][t] - have[o][t]); s += (o ? GLYPH[t] : OUTLINE[t]).repeat(n); }
       return s.split('').map(ch => ch + VS).join('');
     };
@@ -1902,6 +1953,7 @@ function ChessCore() {
     $('undoBtn').disabled = !hist.length || (S.mode === 'ai' && !hist.some((h, i) => colorOfPly(i) === S.human));
     $('resignBtn').disabled = !!over || !hist.length;
     $('resignBtn').innerHTML = S.mode === 'ai' ? '⚑ Resign' : '⚑ Resign ' + (pos.turn ? '(B)' : '(W)');
+    $('pcFriendly').classList.toggle('on', S.pieces === 'friendly'); $('pcClassic').classList.toggle('on', S.pieces !== 'friendly');
     $('evalTog').textContent = S.evalOn ? 'On' : 'Off'; $('evalTog').classList.toggle('on', S.evalOn);
     $('soundTog').textContent = S.sound ? 'On' : 'Off'; $('soundTog').classList.toggle('on', S.sound);
     document.querySelectorAll('.swatch').forEach(b => b.classList.toggle('on', b.dataset.v === S.board));
@@ -2252,6 +2304,8 @@ function ChessCore() {
   $('navNext').onclick = () => go(view + 1); $('navLast').onclick = () => go(hist.length);
   $('hintBtn').onclick = showHint; $('undoBtn').onclick = undo; $('resignBtn').onclick = resign;
   $('flipBtn').onclick = () => { S.flipped = !S.flipped; save(); render(false); };
+  $('pcFriendly').onclick = () => { S.pieces = 'friendly'; save(); render(false); };
+  $('pcClassic').onclick = () => { S.pieces = 'classic'; save(); render(false); };
   $('evalTog').onclick = () => { S.evalOn = !S.evalOn; save(); render(false); requestEval(); };
   $('soundTog').onclick = () => { S.sound = !S.sound; save(); renderButtons(); sfx('move'); };
   for (const [k, [a, b]] of Object.entries(BOARDS)) {

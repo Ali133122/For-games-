@@ -85,7 +85,7 @@ Full chess against a computer opponent, pass-and-play with a friend on one devic
 - **Help:** 💡 Hint draws an arrow showing a strong move, and Undo takes back your last move
 - **Evaluation bar:** shows who's ahead (you can turn it off)
 - **Review:** click any move in the list, or use ← → to step through the game
-- **Friendly pieces:** cartoon pieces with smiling faces, and a star on the king's crown instead of a cross. They're on by default. Switch to the Classic set under Pieces in the settings.
+- **Friendly pieces:** soft, rounded pieces in cheerful colors, with a star on the king's crown instead of a cross. They're on by default. Switch to the Classic set under Pieces in the settings.
 - **Extras:** four board colors, light and dark mode, sound effects, and your game is saved automatically if you close the tab
 
 **Puzzles:** choose 🧩 Puzzles in the New game menu. Each puzzle starts with your opponent's mistake, and your job is to punish it.

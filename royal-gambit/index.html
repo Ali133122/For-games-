@@ -154,6 +154,28 @@
   .result h2 { text-align: center; }
   .result p { text-align: center; color: var(--dim); margin-top: -8px; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .sq.good::before, .sq.bad::before { content: ""; position: absolute; inset: 0; animation: flash .9s ease-out forwards; }
+  .sq.good::before { background: rgba(47, 158, 91, .65); }
+  .sq.bad::before { background: rgba(214, 48, 49, .65); }
+  @keyframes flash { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: .35; } }
+  .puz-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .tag { background: var(--accent); color: var(--accent-ink); border-radius: 999px; padding: 3px 10px; font-size: 13px; font-weight: 700; }
+  #puzNum { color: var(--dim); font-size: 13px; }
+  .puz-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 12px 0; text-align: center; }
+  .puz-stats div { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 4px; }
+  .puz-stats b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .puz-stats span { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+  .puz-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .puz-btns .btn.pulse { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent); } }
+  .puz-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .puz-cats button { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; }
+  .puz-cats button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .cats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .cats button { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px 4px; font-weight: 600; font-size: 13px; }
+  .cats button small { display: block; color: var(--dim); font-weight: 500; font-size: 11px; margin-top: 2px; }
+  .cats button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+  .hide { display: none !important; }
   #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); background: var(--ink); color: var(--bg);
     padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; pointer-events: none; transition: .25s; z-index: 60; }
   #toast.on { opacity: 1; transform: translateX(-50%); }
@@ -192,7 +214,22 @@
         <button class="btn" id="navLast" aria-label="Latest move">⏭</button>
       </div>
     </div>
-    <div class="actions">
+    <div class="card hide" id="puzCard">
+      <div class="puz-top"><span class="tag" id="puzTheme"></span><span id="puzNum"></span></div>
+      <div class="puz-stats">
+        <div><b id="puzSolved">0</b><span>Solved</span></div>
+        <div><b id="puzStreak">0</b><span>Streak</span></div>
+        <div><b id="puzBest">0</b><span>Best streak</span></div>
+      </div>
+      <div class="puz-btns">
+        <button class="btn" id="puzHint">💡 Hint</button>
+        <button class="btn" id="puzSol">👁 Solution</button>
+        <button class="btn" id="puzRetry">↻ Retry</button>
+        <button class="btn primary" id="puzNext">Next ▶</button>
+      </div>
+      <div class="puz-cats" id="puzCats"></div>
+    </div>
+    <div class="actions" id="gameActions">
       <button class="btn" id="hintBtn">💡 Hint</button>
       <button class="btn" id="undoBtn">↶ Undo</button>
       <button class="btn" id="flipBtn">⇅ Flip board</button>
@@ -202,7 +239,7 @@
       <div class="setrow"><span>Board</span><div class="swatches" id="swatches"></div></div>
       <div class="setrow"><span>Evaluation bar</span><button class="toggle" id="evalTog">On</button></div>
       <div class="setrow"><span>Sound</span><button class="toggle" id="soundTog">On</button></div>
-      <div class="keys"><kbd>←</kbd> <kbd>→</kbd> step through moves · <kbd>H</kbd> hint · <kbd>U</kbd> undo · <kbd>F</kbd> flip</div>
+      <div class="keys" id="keys"><kbd>←</kbd> <kbd>→</kbd> step through moves · <kbd>H</kbd> hint · <kbd>U</kbd> undo · <kbd>F</kbd> flip</div>
     </div>
   </aside>
 </div>
@@ -210,9 +247,11 @@
 <div class="modal" id="setup">
   <div class="dialog" role="dialog" aria-labelledby="setupTitle">
     <h2 id="setupTitle"><span>♛&#xFE0E;</span> Royal Gambit</h2>
-    <p class="lead">Classic chess against a computer opponent with five levels, or pass-and-play with a friend.</p>
-    <div class="field"><label>Opponent</label>
-      <div class="seg" id="modeSeg"><button data-v="ai">🤖 Computer</button><button data-v="friend">👥 Friend</button></div></div>
+    <p class="lead">Play the computer at one of five levels, pass-and-play with a friend, or sharpen your tactics with puzzles.</p>
+    <div class="field"><label>Mode</label>
+      <div class="seg" id="modeSeg"><button data-v="ai">🤖 Computer</button><button data-v="friend">👥 Friend</button><button data-v="puzzle">🧩 Puzzles</button></div></div>
+    <div class="field" id="catField"><label>Puzzle type</label>
+      <div class="cats" id="catSeg"></div></div>
     <div class="field" id="sideField"><label>Play as</label>
       <div class="seg" id="sideSeg"><button data-v="0">♔&#xFE0E; White</button><button data-v="r">🎲 Random</button><button data-v="1">♚&#xFE0E; Black</button></div></div>
     <div class="field" id="levelField"><label>Computer level</label>
@@ -659,6 +698,52 @@ function ChessCore() {
   let over = null;   // {winner: 0|1|null, reason}
   let selected = -1, legal = [], hint = null, thinking = false, token = 0, hintsUsed = 0;
   let lastEval = { score: 0, mate: 0 };
+  let puz = null;    // active puzzle state
+  let flash = null;  // {sqs, cls}
+
+  // ---------- Puzzles ----------
+  const PUZZLES = /*PUZZLES*/{"m1":[{"fen":"6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1","line":["d1d8"],
+  "name":"Back-rank mate"},
+    {"fen":"r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4","line":["h5f7"],
+  "name":"Scholar's mate"},
+    {"fen":"6rk/6pp/8/6N1/8/8/8/6K1 w - - 0 1","line":["g5f7"],
+  "name":"Smothered mate"},
+    {"fen":"7k/R7/5N2/8/8/8/8/6K1 w - - 0 1","line":["a7h7"],
+  "name":"Arabian mate"},
+    {"fen":"3rkr2/8/8/8/8/1Q6/8/4K3 w - - 0 1","line":["b3e6"],
+  "name":"Epaulette mate"},
+    {"fen":"rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2","line":["d8h4"],
+  "name":"Fool's mate"},
+    {"fen":"7k/R7/8/8/8/8/8/1R4K1 w - - 0 1","line":["b1b8"],
+  "name":"Ladder mate"},
+    {"fen":"1B5k/8/6K1/8/8/8/B7/8 w - - 0 1","line":["b8e5"],
+  "name":"Two bishops"},
+    {"fen":"6k1/5ppp/8/8/8/8/r4PPP/6K1 b - - 0 1","line":["a2a1"],
+  "name":"Back-rank mate"}],
+  "m2":[{"fen":"r5k1/5ppp/8/8/8/8/2R2PPP/2R3K1 w - - 0 1","line":["c2c8","a8c8","c1c8"],
+  "name":"Doubled rooks"},
+    {"fen":"5r1k/6pp/7N/8/8/1Q6/8/6K1 w - - 0 1","line":["b3g8","f8g8","h6f7"],
+  "name":"Smothered mate"}],
+  "m3":[{"fen":"8/R1R3pp/2k5/8/P3K1PP/3P4/5P2/2b5 b - - 8 50","line":["c7c1","g7g6","a7c7","h7h6","c1c6"],
+  "pre":"c6d6"}],
+  "tac":[{"fen":"r1bqk2r/pp2bppp/3p1n1n/2p1p3/P1B1P3/2N2N2/1PPP1PPP/R1BQ1RK1 b kq - 2 8","line":["c4b5","e8f8","b5d7"],
+  "pre":"d8d7"},
+    {"fen":"4r1k1/2pb1pr1/4q3/3p2P1/pPpP1K1P/P4N2/3Q2R1/6R1 w - - 4 48","line":["e6h3","c3c2","e8e4"],
+  "pre":"d2c3"}]};
+  const CATS = [
+    { id: 'm1', name: 'Mate in 1', sub: 'Warm-up' },
+    { id: 'm2', name: 'Mate in 2', sub: 'Think ahead' },
+    { id: 'm3', name: 'Mate in 3', sub: 'Hard' },
+    { id: 'tac', name: 'Win material', sub: 'Forks, pins…' },
+    { id: 'mix', name: 'Mixed', sub: 'Random' },
+  ];
+  const catName = id => CATS.find(c => c.id === id).name;
+  const PKEY = 'royalGambit.puzzles';
+  let prog = { solved: {}, streak: 0, best: 0 };
+  try { Object.assign(prog, JSON.parse(localStorage.getItem(PKEY) || '{}')); } catch (e) {}
+  const saveProg = () => { try { localStorage.setItem(PKEY, JSON.stringify(prog)); } catch (e) {} };
+  const pid = (cat, i) => cat + ':' + i;
+  const totalPuzzles = () => CATS.filter(c => c.id !== 'mix').reduce((n, c) => n + PUZZLES[c.id].length, 0);
 
   // ---------- Engine workers ----------
   const coreSrc = ChessCore.toString();
@@ -733,7 +818,8 @@ function ChessCore() {
   const KEY = 'royalGambit.v1';
   function save() {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ S, startFen, moves: hist.map(h => h.uci), over, hintsUsed }));
+      if (S.mode === 'puzzle') localStorage.setItem(KEY, JSON.stringify({ S }));
+      else localStorage.setItem(KEY, JSON.stringify({ S, startFen, moves: hist.map(h => h.uci), over, hintsUsed }));
     } catch (e) {}
   }
   function load() {
@@ -791,6 +877,7 @@ function ChessCore() {
       if (last && (sq === last.from || sq === last.to)) cls += ' last';
       if (sq === selected) cls += ' sel';
       if (sq === chkSq) cls += ' check';
+      if (flash && live && flash.sqs.includes(sq)) cls += ' ' + flash.cls;
       const t = tg.find(m => m.to === sq);
       if (t) cls += ' tgt' + (t.cap ? ' cap' : '');
       let co = '';
@@ -841,6 +928,7 @@ function ChessCore() {
 
   const sideName = c => c ? 'Black' : 'White';
   function playerInfo(color) {
+    if (S.mode === 'puzzle') return color === (puz ? puz.side : 0) ? { icon: '🧩', name: 'You', meta: sideName(color) } : { icon: color ? '♚' + VS : '♔' + VS, name: 'Opponent', meta: sideName(color) };
     if (S.mode === 'ai') {
       if (color === S.human) return { icon: '🙂', name: 'You', meta: sideName(color) };
       const L = LEVELS[S.level];
@@ -897,6 +985,15 @@ function ChessCore() {
     } else if (thinking) { s = `${dot(pos.turn)} Computer is thinking…`; }
     else if (S.mode === 'ai') { s = `${dot(pos.turn)} Your move`; d = pos.inCheck() ? 'You are in check!' : ''; }
     else { s = `${dot(pos.turn)} ${sideName(pos.turn)} to move`; d = pos.inCheck() ? 'Check!' : ''; }
+    if (S.mode === 'puzzle' && puz) {
+      const you = dot(puz.side);
+      if (puz.state === 'solved') { s = `✅ Solved!`; d = puz.clean ? 'Clean solve. Your streak grows!' : 'Puzzle complete. Try the next one.'; }
+      else if (puz.state === 'shown') { s = `👁 Solution shown`; d = 'Press Retry to try it yourself, or Next for a new puzzle.'; }
+      else if (puz.state === 'wrong') { s = `${you} Not quite. Try again`; d = `That move doesn't work here.`; }
+      else if (puz.state === 'good') { s = `${you} Correct! Keep going`; d = `Find the next move for ${sideName(puz.side)}.`; }
+      else if (puz.state === 'intro') { s = `${dot(puz.side ^ 1)} Watch the opponent's move…`; d = ''; }
+      else { s = `${you} Find the best move for ${sideName(puz.side)}`; d = puz.preSan ? `${sideName(puz.side ^ 1)} just played ${puz.preSan}. Punish it!` : (puz.p.name || ''); }
+    }
     if (view !== hist.length) d = `Reviewing move ${view} of ${hist.length}. Press ⏭ to return.`;
     else if (!d && hintsUsed && S.mode === 'ai') d = `Hints used: ${hintsUsed}`;
     st.innerHTML = s; sub.textContent = d;
@@ -904,6 +1001,25 @@ function ChessCore() {
 
   function renderButtons() {
     const live = view === hist.length;
+    const pm = S.mode === 'puzzle';
+    $('puzCard').classList.toggle('hide', !pm); $('gameActions').classList.toggle('hide', pm);
+    $('newBtn').textContent = pm ? 'Menu' : 'New game';
+    $('keys').innerHTML = pm ? '<kbd>H</kbd> hint · <kbd>N</kbd> next puzzle · <kbd>F</kbd> flip · <kbd>←</kbd> <kbd>→</kbd> step through moves'
+      : '<kbd>←</kbd> <kbd>→</kbd> step through moves · <kbd>H</kbd> hint · <kbd>U</kbd> undo · <kbd>F</kbd> flip';
+    if (pm && puz) {
+      const list = PUZZLES[puz.cat === 'mix' ? puz.realCat : puz.cat];
+      const solvedIn = list.filter((_, i) => prog.solved[pid(puz.realCat, i)]).length;
+      $('puzTheme').textContent = catName(puz.realCat);
+      $('puzNum').textContent = (puz.cat === 'mix' ? 'Mixed · ' : '') + `#${puz.idx + 1} of ${list.length}` + (prog.solved[pid(puz.realCat, puz.idx)] ? ' ✓' : '') + ` · ${solvedIn} solved`;
+      $('puzSolved').textContent = Object.keys(prog.solved).length + '/' + totalPuzzles();
+      $('puzStreak').textContent = prog.streak; $('puzBest').textContent = prog.best;
+      const done = puz.state === 'solved' || puz.state === 'shown';
+      $('puzHint').disabled = done || puz.state === 'intro' || puz.busy;
+      $('puzSol').disabled = done || puz.state === 'intro';
+      $('puzNext').classList.toggle('pulse', puz.state === 'solved');
+      $('puzHint').textContent = puz.hints ? '💡 Show move' : '💡 Hint';
+      document.querySelectorAll('#puzCats button').forEach(b => b.classList.toggle('on', b.dataset.v === puz.cat));
+    }
     $('navFirst').disabled = $('navPrev').disabled = view === 0;
     $('navNext').disabled = $('navLast').disabled = live;
     $('hintBtn').disabled = !!over || thinking || !live;
@@ -919,8 +1035,9 @@ function ChessCore() {
 
   function renderEval() {
     const bar = $('evalbar');
-    bar.classList.toggle('hidden', !S.evalOn);
-    if (!S.evalOn) return;
+    const evOn = S.evalOn && !(S.mode === 'puzzle' && puz && !['solved', 'shown'].includes(puz.state));
+    bar.classList.toggle('hidden', !evOn);
+    if (!evOn) return;
     let frac, label;
     if (over) { frac = over.winner == null ? .5 : over.winner === 0 ? 1 : 0; label = over.winner == null ? '½' : '#'; }
     else if (lastEval.mate) { frac = lastEval.mate > 0 ? 1 : 0; label = 'M' + Math.abs(lastEval.mate); }
@@ -944,6 +1061,7 @@ function ChessCore() {
 
   function requestEval() {
     if (!S.evalOn || over) return;
+    if (S.mode === 'puzzle' && !(puz && ['solved', 'shown'].includes(puz.state))) return;
     const tk = token;
     analyst.run(startFen, hist.map(h => h.uci), { time: 450 }).then(({ r, turn }) => {
       if (tk !== token) return;
@@ -981,6 +1099,7 @@ function ChessCore() {
     else if (m.cap) sfx('capture');
     else if (m.flag === Core.F_OO || m.flag === Core.F_OOO) sfx('castle');
     else sfx('move');
+    if (S.mode === 'puzzle') return;
     save();
     if (over) { setTimeout(showOver, 700); return; }
     requestEval();
@@ -1007,6 +1126,8 @@ function ChessCore() {
 
   function newGame(keepSide) {
     ai.cancel(); analyst.cancel(); token++;
+    if (S.mode === 'puzzle') { puz = null; startPuzzle(S.puzCat || 'm1'); return; }
+    puz = null; flash = null;
     if (!keepSide) S.human = S.side === 'r' ? (Math.random() < .5 ? 0 : 1) : +S.side;
     startFen = Core.START; pos = new Core.Pos(startFen);
     hist = []; fens = [startFen]; view = 0; over = null; selected = -1; hint = null; thinking = false; hintsUsed = 0;
@@ -1068,14 +1189,121 @@ function ChessCore() {
   let toastT;
   function toast(t) { const el = $('toast'); el.textContent = t; el.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('on'), 2200); }
 
+  // ---------- Puzzle flow ----------
+  function pickIndex(cat, after) {
+    const list = PUZZLES[cat];
+    for (let k = 1; k <= list.length; k++) { const i = (after + k) % list.length; if (!prog.solved[pid(cat, i)]) return i; }
+    return (after + 1) % list.length; // everything solved: just cycle
+  }
+  function startPuzzle(cat, idx, realCat) {
+    ai.cancel(); analyst.cancel(); token++;
+    S.mode = 'puzzle'; S.puzCat = cat;
+    if (realCat == null) {
+      if (cat === 'mix') {
+        const pool = [];
+        for (const c of ['m1', 'm2', 'm3', 'tac']) PUZZLES[c].forEach((_, i) => { if (!prog.solved[pid(c, i)]) pool.push([c, i]); });
+        const pick = pool.length ? pool[Math.floor(Math.random() * pool.length)] : ['tac', Math.floor(Math.random() * PUZZLES.tac.length)];
+        [realCat, idx] = pick;
+      } else { realCat = cat; if (idx == null) idx = pickIndex(cat, (S.puzIdx && S.puzIdx[cat] != null ? S.puzIdx[cat] : -1)); }
+    }
+    S.puzIdx = S.puzIdx || {}; if (cat !== 'mix') S.puzIdx[cat] = idx;
+    const p = PUZZLES[realCat][idx];
+    startFen = p.fen; pos = new Core.Pos(startFen); hist = []; fens = [startFen]; view = 0; over = null;
+    selected = -1; hint = null; thinking = false; flash = null; lastEval = { score: 0, mate: 0 };
+    const pre = p.pre ? Core.findUci(pos, p.pre) : null;
+    const side = pre ? pos.turn ^ 1 : pos.turn;
+    puz = { p, cat, realCat, idx, side, step: 0, state: pre ? 'intro' : 'play', busy: !!pre, clean: true, hints: 0, preSan: pre ? pos.san(pre) : '', gen: token };
+    S.flipped = side === 1;
+    legal = pos.legal();
+    save(); render(false);
+    if (pre) {
+      const g = puz.gen;
+      setTimeout(() => {
+        if (!puz || puz.gen !== g) return;
+        doMove(pre); puz.gen = token; puz.state = 'play'; puz.busy = false; render(false);
+      }, 700);
+    }
+  }
+  const isMateAfter = m => { pos.make(m); const r = pos.inCheck() && !pos.legal().length; pos.unmake(); return r; };
+  function puzzleMove(m, anim) {
+    const line = puz.p.line, want = line[puz.step];
+    const ok = Core.uci(m) === want || isMateAfter(m);
+    if (!ok) {
+      if (puz.clean) { puz.clean = false; prog.streak = 0; saveProg(); }
+      puz.state = 'wrong'; selected = -1; hint = null;
+      flash = { sqs: [m.from, m.to], cls: 'bad' }; sfx('bad'); render(false);
+      const g = puz.gen; setTimeout(() => { if (puz && puz.gen === g && flash && flash.cls === 'bad') { flash = null; render(false); } }, 900);
+      return;
+    }
+    doMove(m, anim);
+    puz.gen = token; puz.step++; hint = null;
+    flash = { sqs: [m.from, m.to], cls: 'good' };
+    if (isOverNow() || puz.step >= line.length) { puzzleSolved(); return; }
+    puz.state = 'good'; puz.busy = true; render(false);
+    const g = puz.gen;
+    setTimeout(() => {
+      if (!puz || puz.gen !== g) return;
+      const r = Core.findUci(pos, line[puz.step]);
+      flash = null; doMove(r); puz.gen = token; puz.step++; puz.busy = false; render(false);
+    }, 550);
+  }
+  const isOverNow = () => !legal.length;
+  function puzzleSolved() {
+    puz.state = 'solved'; puz.busy = false;
+    prog.solved[pid(puz.realCat, puz.idx)] = 1;
+    if (puz.clean) { prog.streak++; prog.best = Math.max(prog.best, prog.streak); }
+    saveProg(); render(false); requestEval();
+    setTimeout(() => sfx('win'), 250);
+    toast(puz.clean ? `Solved! Streak: ${prog.streak} 🔥` : 'Solved!');
+  }
+  function puzzleHint() {
+    if (!puz || !canMove()) return;
+    const m = Core.findUci(pos, puz.p.line[puz.step]); if (!m) return;
+    if (puz.clean) { puz.clean = false; prog.streak = 0; saveProg(); }
+    puz.hints++;
+    if (puz.hints === 1) { selected = m.from; toast('Move this piece'); }
+    else { selected = m.from; hint = m; toast(`The move is ${pos.san(m, legal)}`); }
+    sfx('hint'); render(false);
+  }
+  function puzzleSolution() {
+    if (!puz || puz.state === 'intro') return;
+    if (puz.clean) { puz.clean = false; prog.streak = 0; saveProg(); }
+    puz.state = 'shown'; puz.busy = true; selected = -1; hint = null; flash = null; view = hist.length;
+    const g = ++token; puz.gen = g;
+    const step = () => {
+      if (!puz || puz.gen !== g) return;
+      if (puz.step >= puz.p.line.length || !legal.length) { puz.busy = false; render(false); requestEval(); return; }
+      const m = Core.findUci(pos, puz.p.line[puz.step]);
+      doMove(m); puz.step++; token = g; render(false);
+      setTimeout(step, 750);
+    };
+    render(false); setTimeout(step, 300);
+  }
+  function nextPuzzle() {
+    if (!puz) return startPuzzle(S.puzCat || 'm1');
+    if (puz.cat === 'mix') startPuzzle('mix');
+    else startPuzzle(puz.cat, pickIndex(puz.cat, puz.idx));
+  }
+  CATS.forEach(c => {
+    const b = document.createElement('button'); b.dataset.v = c.id; b.textContent = c.name;
+    b.onclick = () => startPuzzle(c.id); $('puzCats').appendChild(b);
+  });
+  $('puzHint').onclick = puzzleHint; $('puzSol').onclick = puzzleSolution;
+  $('puzRetry').onclick = () => puz && startPuzzle(puz.cat, puz.idx, puz.realCat);
+  $('puzNext').onclick = nextPuzzle;
+
   // ---------- Input ----------
-  const canMove = () => !over && !thinking && view === hist.length && (S.mode === 'friend' || pos.turn === S.human);
+  const canMove = () => {
+    if (S.mode === 'puzzle') return !!puz && !puz.busy && ['play', 'good', 'wrong'].includes(puz.state) && view === hist.length && pos.turn === puz.side;
+    return !over && !thinking && view === hist.length && (S.mode === 'friend' || pos.turn === S.human);
+  };
   let drag = null, hoverSq = -1;
   function select(sq) { selected = sq; render(false); }
   function tryMove(from, to) {
     const c = legal.filter(m => m.from === from && m.to === to);
     if (!c.length) return false;
     if (c.length > 1) { askPromo(c); return true; }
+    if (S.mode === 'puzzle') { puzzleMove(c[0], !drag || !drag.moved); return true; }
     doMove(c[0], !drag || !drag.moved);
     return true;
   }
@@ -1087,7 +1315,7 @@ function ChessCore() {
       const m = cands.find(x => x.promo === t), b = document.createElement('button');
       b.setAttribute('aria-label', 'Promote to ' + ' PNBRQK'[t]);
       b.appendChild(pieceEl(t | (white ? 0 : 8)));
-      b.onclick = e => { e.stopPropagation(); promoEl.classList.remove('on'); doMove(m, false); };
+      b.onclick = e => { e.stopPropagation(); promoEl.classList.remove('on'); S.mode === 'puzzle' ? puzzleMove(m, false) : doMove(m, false); };
       fromTop ? promoEl.appendChild(b) : promoEl.prepend(b);
     }
     promoEl.style.left = c * 12.5 + '%';
@@ -1165,8 +1393,9 @@ function ChessCore() {
     else if (e.key === 'ArrowRight') { go(view + 1); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { go(0); e.preventDefault(); }
     else if (e.key === 'ArrowDown') { go(hist.length); e.preventDefault(); }
-    else if (e.key === 'h' || e.key === 'H') showHint();
-    else if (e.key === 'u' || e.key === 'U' || ((e.ctrlKey || e.metaKey) && e.key === 'z')) { undo(); e.preventDefault(); }
+    else if (e.key === 'h' || e.key === 'H') S.mode === 'puzzle' ? puzzleHint() : showHint();
+    else if ((e.key === 'n' || e.key === 'N') && S.mode === 'puzzle') nextPuzzle();
+    else if (e.key === 'u' || e.key === 'U' || ((e.ctrlKey || e.metaKey) && e.key === 'z')) { if (S.mode !== 'puzzle') undo(); e.preventDefault(); }
     else if (e.key === 'f' || e.key === 'F') $('flipBtn').click();
     else if (e.key === 'Escape') { selected = -1; promoEl.classList.remove('on'); render(false); }
   });
@@ -1174,7 +1403,14 @@ function ChessCore() {
   // ---------- Setup dialog ----------
   const draft = {};
   function openSetup() {
-    Object.assign(draft, { mode: S.mode, side: S.side, level: S.level });
+    Object.assign(draft, { mode: S.mode, side: S.side, level: S.level, puzCat: S.puzCat || 'm1' });
+    const cs = $('catSeg'); cs.innerHTML = '';
+    CATS.forEach(c => {
+      const b = document.createElement('button'); b.dataset.v = c.id;
+      const n = c.id === 'mix' ? totalPuzzles() : PUZZLES[c.id].length;
+      const done = c.id === 'mix' ? Object.keys(prog.solved).length : PUZZLES[c.id].filter((_, i) => prog.solved[pid(c.id, i)]).length;
+      b.innerHTML = `${c.name}<small>${done}/${n} solved</small>`; cs.appendChild(b);
+    });
     const lv = $('levelSeg'); lv.innerHTML = '';
     LEVELS.forEach((L, i) => { const b = document.createElement('button'); b.dataset.v = i; b.innerHTML = `${L.icon}${VS}<small>${L.name}</small>`; lv.appendChild(b); });
     syncSetup(); $('setup').classList.add('on'); $('startBtn').focus();
@@ -1184,12 +1420,17 @@ function ChessCore() {
     document.querySelectorAll('#sideSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === draft.side));
     document.querySelectorAll('#levelSeg button').forEach(b => b.classList.toggle('on', +b.dataset.v === draft.level));
     $('sideField').style.display = $('levelField').style.display = draft.mode === 'ai' ? '' : 'none';
+    $('catField').style.display = draft.mode === 'puzzle' ? '' : 'none';
+    document.querySelectorAll('#catSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === draft.puzCat));
+    $('startBtn').textContent = draft.mode === 'puzzle' ? 'Start puzzles' : 'Start game';
     $('levelDesc').textContent = LEVELS[draft.level].desc;
   }
   $('modeSeg').onclick = e => { const b = e.target.closest('button'); if (b) { draft.mode = b.dataset.v; syncSetup(); } };
   $('sideSeg').onclick = e => { const b = e.target.closest('button'); if (b) { draft.side = b.dataset.v; syncSetup(); } };
+  $('catSeg').onclick = e => { const b = e.target.closest('button'); if (b) { draft.puzCat = b.dataset.v; syncSetup(); } };
   $('levelSeg').onclick = e => { const b = e.target.closest('button'); if (b) { draft.level = +b.dataset.v; syncSetup(); } };
   $('startBtn').onclick = () => { Object.assign(S, draft); $('setup').classList.remove('on'); sfx('move'); newGame(); };
+  $('setup').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') $('startBtn').click(); });
   $('cancelSetup').onclick = () => $('setup').classList.remove('on');
   $('newBtn').onclick = openSetup;
   $('reviewBtn').onclick = () => $('over').classList.remove('on');
@@ -1203,6 +1444,7 @@ function ChessCore() {
 
   // ---------- Boot ----------
   const resumed = load();
+  if (resumed && S.mode === 'puzzle') { sizeVars(); startPuzzle(S.puzCat || 'm1'); return; }
   legal = pos.legal(); sizeVars(); render(false);
   if (resumed && (hist.length || over)) { requestEval(); maybeAI(); if (hist.length && !over) toast('Welcome back — your game was saved'); }
   else openSetup();

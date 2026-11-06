@@ -6,7 +6,7 @@ A repo for games
 ### Royal Gambit
 Open [`royal-gambit/index.html`](royal-gambit/index.html) in a browser. It's one file with no dependencies, and it works offline.
 
-Full chess against a computer opponent, or pass-and-play with a friend on one device.
+Full chess against a computer opponent, pass-and-play with a friend on one device, or a puzzles mode for practicing tactics.
 
 - **Five computer levels:** Pawn, Knight, Bishop, Rook and Queen. They range from a beginner who blunders to a full-strength engine that thinks several moves ahead. Beat a level and you're offered the next one.
 - **All the rules:** castling, en passant, promotion (you pick the piece), check, checkmate, stalemate, threefold repetition, the 50-move rule and insufficient material
@@ -16,7 +16,19 @@ Full chess against a computer opponent, or pass-and-play with a friend on one de
 - **Review:** click any move in the list, or use ← → to step through the game
 - **Extras:** four board colors, light and dark mode, sound effects, and your game is saved automatically if you close the tab
 
-Keyboard: <kbd>H</kbd> hint · <kbd>U</kbd> undo · <kbd>F</kbd> flip board · <kbd>←</kbd>/<kbd>→</kbd> step through moves
+**Puzzles:** choose 🧩 Puzzles in the New game menu. Each puzzle starts with your opponent's mistake, and your job is to punish it.
+
+| Type | Goal |
+|---|---|
+| Mate in 1 | Deliver checkmate in one move |
+| Mate in 2 | Force checkmate in two moves, whatever your opponent does |
+| Mate in 3 | Force checkmate in three moves |
+| Win material | Find the fork, pin or skewer that wins a piece |
+| Mixed | A random unsolved puzzle from any type |
+
+A wrong move flashes red and you can try again. When you play a correct move, the opponent replies automatically. 💡 Hint first shows which piece to move, and pressing it again shows the move itself. Solving a puzzle with no mistakes or hints adds to your streak. Your solved puzzles and best streak are saved. Every puzzle was checked by computer: mates are proven to be forced, with only one correct first move, and each Win material puzzle has a single move that clearly wins.
+
+Keyboard: <kbd>H</kbd> hint · <kbd>N</kbd> next puzzle (in puzzle mode) · <kbd>U</kbd> undo · <kbd>F</kbd> flip board · <kbd>←</kbd>/<kbd>→</kbd> step through moves
 
 ### Lantern Drift
 Open [`lantern-drift/index.html`](lantern-drift/index.html) in a browser. It's one file with no dependencies.

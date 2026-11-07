@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Cloud Hopper</title>
+<style>html, body { margin: 0; height: 100%; background: #9fd8ff; overflow: hidden; } canvas { display: block; width: 100%; height: 100%; }</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="../flint/flint.js"></script>
+<script>
+'use strict';
+// Cloud Hopper: bounce from cloud to cloud and climb as high as you can. Built with Flint.
+const { Game, Scene, text, store, clamp, damp, rand, chance, pick, lerp } = Flint;
+
+const W = 240, H = 320, G = 900, JUMP = 430, SPRING = 760;
+const game = new Game({ canvas: '#game', width: W, height: H, background: '#9fd8ff', letterbox: '#7ab8e0', touchButtons: ['left', 'right'] });
+game.input.bind('go', ['Space', 'Enter', 'PadA', 'Pointer']);
+
+const lerpColor = (a, b, k) => { const pa = a.match(/\w\w/g).map((h) => parseInt(h, 16)), pb = b.match(/\w\w/g).map((h) => parseInt(h, 16)); return `rgb(${pa.map((v, i) => Math.round(lerp(v, pb[i], k))).join(',')})`; };
+const SKIES = [[0, '9fd8ff', 'e6f6ff'], [3000, 'ffb38a', 'ffe2b8'], [6000, '5a3a8a', 'e07aa0'], [9000, '0a0a2a', '2a2a5a']];
+function skyAt(h) {
+  for (let i = SKIES.length - 1; i >= 0; i--) if (h >= SKIES[i][0]) {
+    const a = SKIES[i], b = SKIES[Math.min(i + 1, SKIES.length - 1)], k = b === a ? 0 : clamp((h - a[0]) / (b[0] - a[0]), 0, 1);
+    return [lerpColor(a[1], b[1], k), lerpColor(a[2], b[2], k)];
+  }
+  return ['#9fd8ff', '#e6f6ff'];
+}
+
+class Play extends Scene {
+  enter() { this.state = 'title'; this.best = store.get('cloudhopper:best', 0); this.reset(); }
+  reset() {
+    this.p = { x: W / 2, y: H - 60, vx: 0, vy: -JUMP, face: 1, squash: 1 };
+    this.camY = 0; this.top = H - 30; this.alt = 0; this.stars = 0;
+    this.clouds = [{ x: W / 2 - 24, y: H - 30, w: 48, kind: 'normal' }];
+    this.items = []; this.foes = [];
+    this.lastY = H - 30;
+    this.spawnUp();
+  }
+  begin() { this.reset(); this.state = 'play'; this.audio.sfx('select'); }
+  spawnUp() {
+    while (this.lastY > this.camY - H) {
+      const h = Math.max(0, -this.lastY), gap = clamp(48 + h * 0.004, 48, 92);
+      const y = this.lastY - rand(gap * 0.75, gap), w = clamp(52 - h * 0.002, 34, 52);
+      const r = Math.random();
+      const kind = h < 300 ? 'normal' : r < 0.12 + Math.min(0.15, h / 40000) ? 'moving' : r < 0.24 + Math.min(0.12, h / 50000) ? 'storm' : 'normal';
+      const c = { x: rand(4, W - w - 4), y, w, kind, dir: pick([-1, 1]), speed: rand(30, 60) + h * 0.004 };
+      this.clouds.push(c);
+      // storm clouds can't be bounced on, so always leave a real cloud close by
+      let next = y;
+      if (kind === 'storm') { next = y + rand(4, 14); this.clouds.push({ x: clamp(c.x + pick([-1, 1]) * rand(70, 110), 4, W - w - 4), y: next, w, kind: 'normal' }); }
+      if (kind === 'normal' && chance(0.1)) this.items.push({ kind: 'spring', cloud: c, dx: rand(6, w - 14) });
+      if (chance(0.25)) this.items.push({ kind: 'star', x: rand(12, W - 12), y: y - rand(20, 40) });
+      if (h > 1600 && chance(0.03 + Math.min(0.05, h / 90000))) this.foes.push({ x: rand(20, W - 20), y: y - 30, t: rand(0, 6), dead: false });
+      this.lastY = next;
+    }
+  }
+  update(dt) {
+    const input = this.input, p = this.p, ptr = input.pointer;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.state !== 'play') {
+      if (this.state === 'falling') { p.vy += G * dt; p.y += p.vy * dt; if (p.y > this.camY + H + 30) this.gameOver(); return; }
+      if (this.state === 'title') { p.y += p.vy * dt; p.vy += G * dt; if (p.y > H - 40) { p.y = H - 40; p.vy = -JUMP * 0.8; p.squash = 0.7; } p.squash = damp(p.squash, 1, 10, dt); }
+      if (this.time > 0.4 && input.pressed('go') && (this.state === 'title' || this.time - this.overAt > 1)) this.begin();
+      return;
+    }
+    // left/right; the screen wraps around at the sides
+    let dir = input.axis('left', 'right') + input.stick.x;
+    if (ptr.type === 'mouse' && ptr.x !== this.lastMx) { this.mouseT = 1.5; this.lastMx = ptr.x; }
+    this.mouseT = (this.mouseT || 0) - dt;
+    if (!dir && ((ptr.down && ptr.type === 'touch') || this.mouseT > 0)) dir = clamp((ptr.x - p.x) / 30, -1, 1);
+    p.vx = damp(p.vx, dir * 170, 9, dt);
+    if (dir) p.face = Math.sign(dir);
+    p.x += p.vx * dt; if (p.x < -10) p.x += W + 20; if (p.x > W + 10) p.x -= W + 20;
+    const prevY = p.y;
+    p.vy += G * dt; p.y += p.vy * dt;
+    p.squash = damp(p.squash, 1, 10, dt);
+    for (const c of this.clouds) if (c.kind === 'moving') { c.x += c.dir * c.speed * dt; if (c.x < 2 || c.x + c.w > W - 2) c.dir *= -1; }
+    // landing (only while falling)
+    if (p.vy > 0) for (const c of this.clouds) {
+      if (c.gone || p.x < c.x - 4 || p.x > c.x + c.w + 4 || prevY > c.y || p.y < c.y) continue;
+      const spring = this.items.find((it) => it.kind === 'spring' && it.cloud === c && Math.abs(c.x + it.dx + 4 - p.x) < 10);
+      if (c.kind === 'storm') { c.gone = true; this.audio.noise({ dur: 0.3, vol: 0.15, freq: 300 }); this.particles.emit(p.x, c.y, { count: 16, speed: [20, 60], life: [0.3, 0.6], color: ['#6a6f80', '#ffe066'] }); continue; }
+      p.y = c.y; p.vy = spring ? -SPRING : -JUMP; p.squash = 0.65;
+      if (spring) { spring.used = 0.3; this.audio.tone({ freq: 300, to: 1200, dur: 0.3, type: 'square', vol: 0.12 }); }
+      else this.audio.tone({ freq: 320 + Math.min(this.alt, 9000) / 30, to: 520 + Math.min(this.alt, 9000) / 30, dur: 0.1, type: 'triangle', vol: 0.1 });
+      this.particles.emit(p.x, c.y, { count: 5, speed: [10, 30], angle: Math.PI / 2, spread: 2.5, life: [0.2, 0.4], color: '#ffffff' });
+      break;
+    }
+    for (const it of this.items) if (it.used) it.used = Math.max(0, it.used - dt);
+    // stars and foes
+    for (const it of this.items) if (it.kind === 'star' && !it.got && Math.hypot(it.x - p.x, it.y - (p.y - 8)) < 13) { it.got = true; this.stars++; this.audio.sfx('coin'); this.particles.emit(it.x, it.y, { count: 10, speed: [20, 50], life: [0.3, 0.5], color: '#ffe066' }); }
+    for (const f of this.foes) {
+      if (f.dead) { f.y += 200 * dt; continue; }
+      f.t += dt; f.x += Math.sin(f.t * 1.5) * 40 * dt;
+      if (Math.hypot(f.x - p.x, f.y - (p.y - 8)) < 14) {
+        if (p.vy > 0 && p.y - 8 < f.y) { f.dead = true; p.vy = -JUMP; this.audio.sfx('hit'); this.particles.emit(f.x, f.y, { count: 14, speed: [20, 70], life: [0.3, 0.6], color: ['#5a3a6a', '#ff5a7a'] }); }
+        else { this.state = 'falling'; p.vy = 0; this.audio.sfx('hurt'); this.camera.shake(3, 0.3); }
+      }
+    }
+    // camera follows you up, never down
+    this.camY = Math.min(this.camY, p.y - H * 0.45);
+    this.alt = Math.max(this.alt, Math.round((H - 30 - p.y) / 2));
+    this.spawnUp();
+    this.clouds = this.clouds.filter((c) => c.y < this.camY + H + 40);
+    this.items = this.items.filter((it) => (it.kind === 'star' ? it.y : it.cloud.y) < this.camY + H + 40 && !(it.cloud && it.cloud.gone));
+    this.foes = this.foes.filter((f) => f.y < this.camY + H + 60);
+    if (p.y > this.camY + H + 30) this.gameOver();
+  }
+  gameOver() {
+    const score = this.alt + this.stars * 50;
+    this.final = score; this.state = 'over'; this.overAt = this.time;
+    this.newBest = score > this.best; if (this.newBest) { this.best = score; store.set('cloudhopper:best', score); }
+    this.audio.sfx('lose');
+  }
+  drawBackground(ctx) {
+    const [top, bot] = skyAt(this.alt * 2);
+    const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, top); g.addColorStop(1, bot);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    if (this.alt > 3500) { ctx.fillStyle = `rgba(255,255,255,${clamp((this.alt - 3500) / 1500, 0, 0.8)})`; for (let i = 0; i < 40; i++) ctx.fillRect((i * 53) % W, ((i * 97 - this.camY * 0.1) % H + H) % H, 1, 1); }
+    ctx.fillStyle = 'rgba(255,255,255,.25)';
+    for (let i = 0; i < 5; i++) { const y = ((i * 90 - this.camY * 0.3) % (H + 60) + H + 60) % (H + 60) - 30; ctx.beginPath(); ctx.ellipse((i * 67) % W, y, 40, 10, 0, 0, Math.PI * 2); ctx.fill(); }
+  }
+  drawWorld(ctx) {
+    ctx.save(); ctx.translate(0, -Math.round(this.camY));
+    for (const c of this.clouds) {
+      if (c.gone) continue;
+      const col = c.kind === 'storm' ? '#7a7f90' : c.kind === 'moving' ? '#e8f4ff' : '#ffffff';
+      ctx.fillStyle = col;
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(c.x + 6 + (i * (c.w - 12)) / 3, c.y + 2 - (i % 2) * 3, 8, 0, Math.PI * 2); ctx.fill(); }
+      ctx.fillRect(c.x + 4, c.y, c.w - 8, 7);
+      if (c.kind === 'storm') { ctx.strokeStyle = '#ffe066'; ctx.beginPath(); ctx.moveTo(c.x + c.w / 2, c.y + 7); ctx.lineTo(c.x + c.w / 2 - 3, c.y + 12); ctx.lineTo(c.x + c.w / 2 + 2, c.y + 12); ctx.lineTo(c.x + c.w / 2 - 1, c.y + 17); ctx.stroke(); }
+      if (c.kind === 'moving') { ctx.fillStyle = '#9fd8ff'; ctx.fillRect(c.x + c.w / 2 - 6, c.y + 3, 3, 2); ctx.fillRect(c.x + c.w / 2 + 3, c.y + 3, 3, 2); }
+    }
+    for (const it of this.items) {
+      if (it.kind === 'spring') { const x = it.cloud.x + it.dx, y = it.cloud.y, ext = it.used ? 8 : 0; ctx.fillStyle = '#ff5a7a'; ctx.fillRect(x, y - 6 - ext, 9, 3); ctx.strokeStyle = '#888'; ctx.beginPath(); ctx.moveTo(x + 2, y); ctx.lineTo(x + 7, y - 2 - ext / 2); ctx.lineTo(x + 2, y - 4 - ext); ctx.stroke(); }
+      else if (!it.got) { ctx.fillStyle = '#ffe066'; ctx.save(); ctx.translate(it.x, it.y + Math.sin(this.time * 4 + it.x) * 2); ctx.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + (i * Math.PI) / 5, r = i % 2 ? 2.5 : 6; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.fill(); ctx.restore(); }
+    }
+    for (const f of this.foes) {
+      const flap = Math.sin(this.time * 14 + f.t) * 4;
+      ctx.fillStyle = f.dead ? '#3a2a40' : '#5a3a6a'; ctx.beginPath(); ctx.arc(f.x, f.y, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(f.x - 6, f.y); ctx.lineTo(f.x - 15, f.y - 4 - flap); ctx.lineTo(f.x - 8, f.y + 3); ctx.moveTo(f.x + 6, f.y); ctx.lineTo(f.x + 15, f.y - 4 - flap); ctx.lineTo(f.x + 8, f.y + 3); ctx.fill();
+      ctx.fillStyle = '#ff5a7a'; for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(f.x + i * 4 - 2, f.y - 6); ctx.lineTo(f.x + i * 4, f.y - 11); ctx.lineTo(f.x + i * 4 + 2, f.y - 6); ctx.fill(); }
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(f.x - 3, f.y - 2, 2, 2); ctx.fillRect(f.x + 1, f.y - 2, 2, 2);
+    }
+    // the hopper: a round little cloud spirit
+    const p = this.p, sx = 2 - p.squash, sy = p.squash;
+    ctx.save(); ctx.translate(p.x, p.y); ctx.scale(sx, sy);
+    ctx.fillStyle = '#ff8a5a'; ctx.beginPath(); ctx.arc(0, -9, 9, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd0b0'; ctx.beginPath(); ctx.arc(p.face * 2, -8, 5.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#2a1a2a'; ctx.fillRect(p.face * 2 - 3, -10, 2, 3); ctx.fillRect(p.face * 2 + 1, -10, 2, 3);
+    ctx.fillStyle = '#ff8a5a'; ctx.beginPath(); ctx.moveTo(-3, -17); ctx.lineTo(0, -23); ctx.lineTo(3, -17); ctx.fill();
+    ctx.restore();
+    ctx.restore();
+  }
+  drawUI(ctx) {
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ size: 9, color: '#ffffff', weight: '800', shadow: 'rgba(0,40,80,.35)', font: 'system-ui, -apple-system, "Segoe UI", sans-serif' }, o));
+    if (this.state === 'title') {
+      t('CLOUD', W / 2, 40, { size: 30, align: 'center', weight: '900' }); t('HOPPER', W / 2, 72, { size: 30, align: 'center', weight: '900', color: '#ff8a5a' });
+      t('bounce from cloud to cloud', W / 2, 120, { size: 10, align: 'center', weight: '600' });
+      t('grey storm clouds break · pink springs launch you', W / 2, 138, { size: 7, align: 'center', weight: '500' });
+      t('stomp the spiky birds, don\'t touch them', W / 2, 150, { size: 7, align: 'center', weight: '500' });
+      t('←/→, mouse or touch to move · the sides wrap around', W / 2, 162, { size: 7, align: 'center', weight: '500' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to start', W / 2, 200, { size: 10, align: 'center', color: '#ffe066' });
+      if (this.best) t(`best ${this.best}`, W / 2, 218, { size: 9, align: 'center' });
+      return;
+    }
+    t(`${this.alt} m`, 8, 6, { size: 12 });
+    t(`★ ${this.stars}`, W - 8, 6, { size: 11, align: 'right', color: '#ffe066' });
+    if (this.state === 'over') {
+      ctx.fillStyle = 'rgba(20,30,60,.6)'; ctx.fillRect(0, 100, W, 110);
+      t('YOU FELL', W / 2, 112, { size: 22, align: 'center', color: '#ff8a5a' });
+      t(`${this.alt} m + ${this.stars} ★ = ${this.final}`, W / 2, 146, { size: 11, align: 'center' });
+      t(this.newBest ? 'new best!' : `best ${this.best}`, W / 2, 164, { size: 10, align: 'center', color: '#ffe066' });
+      if (this.time - this.overAt > 1) t('Space or tap to hop again', W / 2, 186, { size: 9, align: 'center' });
+    }
+  }
+}
+
+game.start(new Play());
+window.cloudHopper = game;
+</script>
+</body>
+</html>

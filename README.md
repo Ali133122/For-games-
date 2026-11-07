@@ -12,7 +12,7 @@ Open [`index.html`](index.html) in a browser to walk around a 3D neon arcade. Ev
 1. Put the game in its own folder with an `index.html` inside, e.g. `my-game/index.html`.
 2. Add an entry to [`games.js`](games.js) with a title, path, neon color, tagline and controls.
 
-Add `room: 2` to put a game in the back room. The arcade has two rooms joined by a glowing doorway: the **main floor** and the **back room**, each with its own look. Walk through the doorway to switch rooms. Each room grows to fit however many cabinets it has. You can also press **+ Add game** inside the arcade to add a cabinet without editing files. Those are saved in your browser only.
+Add `room: 2` or `room: 3` to choose a room. The arcade has three rooms in a row, each with its own look: the **main floor**, the **back room** and the **sky deck**. Each room's east doorway leads to the next room and its west doorway leads back. Each room grows to fit however many cabinets it has. You can also press **+ Add game** inside the arcade to add a cabinet without editing files. Those are saved in your browser only.
 
 ## Flint game engine
 [`flint/flint.js`](flint/flint.js) is a tiny 2D game engine in one file with no dependencies. It covers scenes, entities, tilemaps with collision, a camera, keyboard/mouse/touch/gamepad input, sprites and animation, particles, tweens and synthesized sound.
@@ -129,6 +129,35 @@ A bubble shooter. Pop groups of three or more of one color. Any bubbles left han
 
 - **Aim:** mouse or ←/→ (drag on touch). **Shoot:** click or Space (let go on touch). **Swap with the next bubble:** X
 - Each shot that doesn't pop anything brings the ceiling closer. Clearing the board starts a new level with one more color. Don't let the bubbles reach the dashed line
+
+### Neon Maze (sky deck)
+Open [`neon-maze/index.html`](neon-maze/index.html). A 3D game built with Flint3D.
+
+A first-person maze. Find every glowing orb before the clock runs out. Each orb adds 6 seconds, and the minimap fills in as you explore. A red sentry patrols the corridors and chases you if it spots you down a straight hallway. Getting caught costs 10 seconds. Each maze you clear brings a bigger one with more orbs.
+
+- **Move:** WASD. **Look:** drag the mouse, or ←/→. On touch screens, your left thumb walks and your right thumb looks
+
+### Bumper Ring (sky deck)
+Open [`bumper-ring/index.html`](bumper-ring/index.html). A 3D game built with Flint3D.
+
+Sumo bumper cars on a floating ring, against three rivals. Shove the others off the edge; the last one on wins the round, and the first to win 3 rounds takes the match. After 15 seconds the ring's outer tiles start shaking and falling away.
+
+- **Move:** WASD or arrows (drag on touch). **Dash:** Space (or B on touch). A dash hits much harder and recharges in 1.6 seconds
+- The rivals go after whoever is nearest the edge, steer back from the edge themselves, and get tougher each round
+
+### Pipe Flow (sky deck)
+Open [`pipe-flow/index.html`](pipe-flow/index.html). Built with Flint.
+
+Turn the pipe tiles so the water can run from the tap to the drain. The water starts on its own when the timer runs out, or press F to start it early for bonus points. A leak costs one of your three lives. Every board is randomly generated and always solvable, and each one is bigger than the last.
+
+- **Turn a pipe:** click or tap it, or use the arrow keys and Space
+
+### Cloud Hopper (sky deck)
+Open [`cloud-hopper/index.html`](cloud-hopper/index.html). Built with Flint.
+
+Bounce from cloud to cloud and climb as high as you can. The sky turns from day to sunset to night to space as you go. Grey storm clouds break when you land on them, pink springs launch you, moving clouds drift sideways, and spiky birds show up higher up. Stomp them from above, but don't touch them otherwise.
+
+- **Move:** ←/→, the mouse, or the on-screen buttons. The sides of the screen wrap around
 
 ### Sparkwood
 Open [`sparkwood/index.html`](sparkwood/index.html) in a browser. It's built with Flint and works offline.

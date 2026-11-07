@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Bumper Ring</title>
+<style>html, body { margin: 0; height: 100%; background: #1a2440; overflow: hidden; }</style>
+</head>
+<body>
+<script src="../flint/flint.js"></script>
+<script src="../flint/flint3d.js"></script>
+<script>
+'use strict';
+// Bumper Ring: shove the other bumpers off the floating ring. Last one on wins the round. Built with Flint3D.
+const { Game3D, Scene3D, Geometry, Material, Node, mesh } = Flint3D;
+const { text, store, clamp, damp, rand, pick } = Flint;
+
+const game = new Game3D({ touchButtons: ['b'] });
+game.input.bind('dash', ['Space', 'ShiftLeft', 'KeyX', 'PadA', 'TouchB']);
+game.input.bind('go', ['Enter', 'Space', 'PadA', 'PadStart', 'Pointer']);
+
+const R0 = 9, BR = 0.8, ACCEL = 16, DASH = 15, WINS = 3;
+const RIVALS = [
+  { name: 'Ruby', color: '#ff4f5a' }, { name: 'Jade', color: '#3fd28a' }, { name: 'Sunny', color: '#ffc23d' },
+];
+const bodyGeo = Geometry.cylinder(BR, BR, 0.5, 20), bumperGeo = Geometry.cylinder(BR + 0.12, BR + 0.12, 0.22, 24), domeGeo = Geometry.sphere(0.42, 14, 10), eyeGeo = Geometry.box(0.1, 0.14, 0.05);
+
+function makeBumper(color) {
+  const n = new Node();
+  n.add(mesh(bumperGeo, { color: '#22262e' }, { position: [0, 0.22, 0] }));
+  n.add(mesh(bodyGeo, { color }, { position: [0, 0.45, 0] }));
+  n.add(mesh(domeGeo, { color: '#f2f2f2', emissive: color, emissiveIntensity: 0.15 }, { position: [0, 0.75, -0.1] }));
+  for (const x of [-0.13, 0.13]) n.add(mesh(eyeGeo, { color: '#000', emissive: '#ffffff', emissiveIntensity: 0.4 }, { position: [x, 0.82, 0.28] }));
+  return n;
+}
+
+class Arena extends Scene3D {
+  enter() {
+    Object.assign(this.env, { background: '#1a2440', fog: [30, 70], sky: '#c8d8ff', ground: '#3a3050', sunDir: [-0.4, -1, -0.5], sunIntensity: 0.8 });
+    this.env.lights.push({ position: { x: 0, y: 3, z: 0 }, color: '#ff9adf', intensity: 0.6, range: 14 });
+    this.camera.fov = 52;
+    this.best = store.get('bumperring:best', 0);
+    // the ring: an outer band of tiles that drop away as the round goes on, and a solid middle
+    this.tiles = [];
+    const rings = [[3.2, 6.2, 10], [6.2, R0, 18]];
+    this.add(mesh(Geometry.cylinder(3.2, 3.0, 1, 24), { color: '#5a6a9a' }, { position: [0, -0.5, 0] }));
+    for (const [r0, r1, n] of rings) for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2, rm = (r0 + r1) / 2, w = (r1 - r0) - 0.08, len = (Math.PI * 2 * rm) / n - 0.1;
+      const node = this.add(mesh(Geometry.box(len, 1, w), { color: (i % 2) ? '#7484b8' : '#6474a8' }, { position: [Math.sin(a) * rm, -0.5, Math.cos(a) * rm], rotation: [0, a, 0] }));
+      this.tiles.push({ node, a, r0, r1, n, dropT: 0, gone: false });
+    }
+    this.edge = this.add(mesh(Geometry.cylinder(R0 + 0.05, R0 + 0.05, 0.08, 48, false), { color: '#000', emissive: '#ff5ab0', doubleSided: true }, { position: [0, 0.02, 0] }));
+    // floating islands below for depth
+    for (let i = 0; i < 14; i++) this.add(mesh(Geometry.flat(Geometry.sphere(rand(1, 3), 6, 4)), { color: '#4a4a7a' }, { position: [rand(-40, 40), rand(-30, -12), rand(-40, 10)] }));
+    this.karts = [{ name: 'You', color: '#5aa9ff', you: true }, ...RIVALS].map((k) => Object.assign(k, { node: this.add(makeBumper(k.color)), wins: 0 }));
+    this.camera.position.set(0, 17, 14); this.camera.lookAt(0, -0.5, 0.6);
+    this.state = 'title';
+    this.place();
+  }
+  place() {
+    this.karts.forEach((k, i) => {
+      const a = (i / 4) * Math.PI * 2 + Math.PI;
+      Object.assign(k, { x: Math.sin(a) * 5.5, z: Math.cos(a) * 5.5, y: 0, vx: 0, vz: 0, vy: 0, out: false, dashT: 0, cd: rand(0.5, 1.5), face: a + Math.PI, hitBy: null });
+      k.node.visible = true;
+    });
+    for (const t of this.tiles) { t.gone = false; t.dropT = 0; t.node.position.y = -0.5; t.node.visible = true; }
+    this.radius = R0; this.roundT = 0; this.sync();
+  }
+  begin() { this.karts.forEach((k) => (k.wins = 0)); this.round = 0; this.nextRound(); this.audio.sfx('select'); }
+  nextRound() {
+    this.round++;
+    this.place();
+    this.state = 'count'; this.countT = 2.2;
+    this.aiLevel = 0.75 + Math.min(0.35, this.round * 0.06);
+    this.msg = { text: `ROUND ${this.round}`, t: 1.6 };
+  }
+  sync() { for (const k of this.karts) { k.node.position.set(k.x, k.y, k.z); k.node.rotation.y = k.face; } }
+  onFloor(k) {
+    const d = Math.hypot(k.x, k.z);
+    if (d < 3.2) return true;
+    if (d > R0) return false;
+    const ang = Math.atan2(k.x, k.z);
+    return this.tiles.some((t) => !t.gone && d >= t.r0 - 0.3 && d <= t.r1 + 0.3 && Math.abs(((ang - t.a + Math.PI * 3) % (Math.PI * 2)) - Math.PI) < Math.PI / t.n + 0.05);
+  }
+  control(k, dt) {
+    // returns a wished direction {x, z} and whether to dash
+    if (k.you) {
+      const inp = this.input;
+      let x = inp.axis('left', 'right') + inp.stick.x, z = inp.axis('up', 'down') + inp.stick.y;
+      const p = inp.pointer;
+      if (p.down && p.type === 'touch') { const s = this.toScreen({ x: k.x, y: 0, z: k.z }); x = (p.x - s.x) / 60; z = (p.y - s.y) / 60; }
+      const l = Math.hypot(x, z); if (l > 1) { x /= l; z /= l; }
+      return { x, z, dash: inp.pressed('dash') };
+    }
+    // rivals: pick whoever is easiest to shove off, and hit them from the middle side
+    const alive = this.karts.filter((o) => o !== k && !o.out);
+    if (!alive.length) return { x: 0, z: 0, dash: false };
+    const target = alive.reduce((best, o) => {
+      const score = Math.hypot(o.x, o.z) * 1.2 - Math.hypot(o.x - k.x, o.z - k.z) + (o.you ? 1.5 : 0);
+      return score > best.s ? { o, s: score } : best;
+    }, { o: alive[0], s: -1e9 }).o;
+    const td = Math.hypot(target.x, target.z) || 1, ux = target.x / td, uz = target.z / td;
+    // aim at a point just inside the target, so the push goes outward
+    let ax = target.x - ux * 1.4 - k.x, az = target.z - uz * 1.4 - k.z;
+    const al = Math.hypot(ax, az) || 1; ax /= al; az /= al;
+    // never drive off the edge: steer back toward the middle when close to it
+    const my = Math.hypot(k.x, k.z), safe = this.radius - 2.2;
+    if (my > safe) { const w = clamp((my - safe) / 1.5, 0, 1); ax = ax * (1 - w) - (k.x / my) * w * 1.5; az = az * (1 - w) - (k.z / my) * w * 1.5; }
+    // brake when moving fast toward the edge
+    const outward = (k.vx * k.x + k.vz * k.z) / (my || 1);
+    if (outward > 6 && my > safe - 1) { ax -= k.x / my; az -= k.z / my; }
+    const dist = Math.hypot(target.x - k.x, target.z - k.z);
+    const lined = ((target.x - k.x) * ax + (target.z - k.z) * az) / (dist || 1);
+    return { x: ax * this.aiLevel, z: az * this.aiLevel, dash: dist < 4 && lined > 0.85 && my < this.radius - 3 && Math.random() < 0.08 * this.aiLevel };
+  }
+  update(dt) {
+    const input = this.input;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.msg) { this.msg.t -= dt; if (this.msg.t <= 0) this.msg = null; }
+    this.edge.material.emissiveIntensity = 0.7 + Math.sin(this.time * 4) * 0.3;
+    if (this.state === 'title' || this.state === 'over') {
+      for (const k of this.karts) { k.face += dt * (k.you ? 1 : -0.7); }
+      this.sync();
+      if (this.time > 0.5 && input.pressed('go') && (this.state === 'title' || this.time - this.overAt > 1.2)) this.begin();
+      return;
+    }
+    if (this.state === 'count') { this.countT -= dt; if (this.countT <= 0) { this.state = 'fight'; this.audio.tone({ freq: 880, dur: 0.3, type: 'square', vol: 0.1 }); } return; }
+    if (this.state === 'fight') {
+      this.roundT += dt;
+      // after 15 seconds the outer tiles start falling away, one by one
+      if (this.roundT > 15) {
+        this.shrinkT = (this.shrinkT || 0) - dt;
+        const outer = this.tiles.filter((t) => !t.dropT && t.r1 === R0), inner = this.tiles.filter((t) => !t.dropT && t.r1 < R0);
+        const pickFrom = outer.length ? outer : inner;
+        if (this.shrinkT <= 0 && pickFrom.length) { this.shrinkT = 0.8; pick(pickFrom).dropT = 1.2; }
+      }
+    }
+    for (const t of this.tiles) if (t.dropT > 0 && !t.gone) {
+      t.dropT -= dt;
+      t.node.position.y = -0.5 + Math.sin(this.time * 40) * 0.05;
+      if (t.dropT <= 0) { t.gone = true; this.audio.noise({ dur: 0.2, vol: 0.06, freq: 400 }); }
+    }
+    for (const t of this.tiles) if (t.gone && t.node.visible) { t.node.position.y -= 12 * dt; if (t.node.position.y < -30) t.node.visible = false; }
+    this.radius = this.tiles.some((t) => !t.gone && t.r1 === R0) ? R0 : this.tiles.some((t) => !t.gone) ? 6.2 : 3.2;
+
+    for (const k of this.karts) {
+      if (k.out) { k.vy -= 20 * dt; k.y += k.vy * dt; k.x += k.vx * dt; k.z += k.vz * dt; k.face += dt * 6; if (k.y < -25) k.node.visible = false; continue; }
+      const c = this.state === 'fight' ? this.control(k, dt) : { x: 0, z: 0, dash: false };
+      k.cd = Math.max(0, k.cd - dt); k.dashT = Math.max(0, k.dashT - dt);
+      k.vx += c.x * ACCEL * dt; k.vz += c.z * ACCEL * dt;
+      if (c.dash && k.cd <= 0) {
+        const l = Math.hypot(c.x, c.z) || 1, dx = c.x ? c.x / l : Math.sin(k.face), dz = c.z ? c.z / l : Math.cos(k.face);
+        k.vx += dx * DASH; k.vz += dz * DASH; k.cd = 1.6; k.dashT = 0.25;
+        this.audio.noise({ dur: 0.2, vol: k.you ? 0.15 : 0.06, freq: 600, to: 2400, filter: 'bandpass' });
+        this.particles.emit({ x: k.x, y: 0.3, z: k.z }, { count: 10, speed: [1, 3], life: [0.2, 0.4], color: [k.color, '#ffffff'], size: [0.06, 0.12] });
+      }
+      const f = Math.exp(-1.6 * dt); k.vx *= f; k.vz *= f;
+      const sp = Math.hypot(k.vx, k.vz); if (sp > 22) { k.vx *= 22 / sp; k.vz *= 22 / sp; }
+      k.x += k.vx * dt; k.z += k.vz * dt;
+      if (sp > 0.5) k.face = damp(k.face, k.face + ((((Math.atan2(k.vx, k.vz) - k.face) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI), 8, dt);
+      if (!this.onFloor(k)) { k.out = true; k.vy = 0; this.knockedOut(k); }
+    }
+    // bumper-to-bumper hits: a dash hits much harder
+    const live = this.karts.filter((k) => !k.out);
+    for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {
+      const A = live[i], B = live[j], dx = A.x - B.x, dz = A.z - B.z, d = Math.hypot(dx, dz), min = (BR + 0.12) * 2;
+      if (d >= min || d === 0) continue;
+      const nx = dx / d, nz = dz / d, push = (min - d) / 2;
+      A.x += nx * push; A.z += nz * push; B.x -= nx * push; B.z -= nz * push;
+      const vn = (A.vx - B.vx) * nx + (A.vz - B.vz) * nz;
+      if (vn < 0) {
+        const j2 = -vn * (A.dashT > 0 || B.dashT > 0 ? 1.15 : 0.95);
+        A.vx += nx * j2; A.vz += nz * j2; B.vx -= nx * j2; B.vz -= nz * j2;
+        A.hitBy = B; B.hitBy = A;
+        const hard = -vn > 8;
+        this.audio.tone({ freq: hard ? 160 : 260, dur: 0.08, type: 'square', vol: Math.min(0.15, -vn * 0.012) });
+        if (hard && (A.you || B.you)) this.camera.shake(0.15, 0.2);
+        this.particles.emit({ x: (A.x + B.x) / 2, y: 0.5, z: (A.z + B.z) / 2 }, { count: hard ? 14 : 5, speed: [1, 4], life: [0.2, 0.4], color: ['#ffffff', '#ffe066'], size: [0.05, 0.1] });
+      }
+    }
+    this.sync();
+    if (this.state === 'fight') {
+      const alive = this.karts.filter((k) => !k.out), me = this.karts[0];
+      if (me.out || alive.length <= 1) this.endRound(alive.length === 1 ? alive[0] : null);
+    }
+  }
+  knockedOut(k) {
+    this.audio.tone({ freq: 500, to: 120, dur: 0.6, type: 'triangle', vol: k.you ? 0.18 : 0.08 });
+    if (k.hitBy && k.hitBy.you && !k.you) this.msg = { text: `${k.name.toUpperCase()} IS OUT!`, t: 1.2 };
+  }
+  endRound(winner) {
+    this.state = 'between';
+    const me = this.karts[0];
+    // if you fell, the rivals still left fight it out instantly: the one nearest the middle takes the round
+    if (!winner) winner = me.out ? this.karts.filter((k) => !k.out).sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z))[0] : me;
+    if (winner) winner.wins++;
+    this.msg = { text: winner && winner.you ? 'YOU WIN THE ROUND!' : `${(winner ? winner.name : 'nobody').toUpperCase()} WINS THE ROUND`, t: 2 };
+    this.audio.sfx(winner && winner.you ? 'win' : 'hurt');
+    this.timers.after(2.3, () => {
+      const champ = this.karts.find((k) => k.wins >= WINS);
+      if (!champ) return this.nextRound();
+      this.state = 'over'; this.overAt = this.time; this.champ = champ;
+      if (champ.you) { const best = this.round; this.newBest = !this.best || best < this.best; if (this.newBest) { this.best = best; store.set('bumperring:best', best); } }
+      this.place();
+    });
+  }
+  drawUI(ctx) {
+    const W = this.width, H = this.height, big = Math.min(W, H);
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ align: 'center', color: '#ffffff', shadow: 'rgba(0,0,0,.5)', shadowOffset: 2, font: 'system-ui, -apple-system, "Segoe UI", sans-serif', weight: '800', size: 16 }, o));
+    if (this.state === 'title') {
+      t('BUMPER RING', W / 2, H * 0.06, { size: big * 0.1, color: '#ffe066' });
+      t(`shove the others off the ring · last one on wins the round · first to ${WINS} rounds`, W / 2, H * 0.06 + big * 0.12, { size: Math.max(12, big * 0.03), weight: '600' });
+      t('WASD / arrows move · Space dashes (it hits much harder) · on touch: drag to steer, B dashes', W / 2, H * 0.06 + big * 0.17, { size: Math.max(11, big * 0.024), weight: '500' });
+      t('after 15 seconds the edge of the ring starts falling away', W / 2, H * 0.06 + big * 0.21, { size: Math.max(11, big * 0.024), weight: '500', color: '#ffb0dc' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Enter or tap to start', W / 2, H * 0.88, { size: Math.max(14, big * 0.036) });
+      if (this.best) t(`best: won the match in ${this.best} rounds`, W / 2, H * 0.88 + big * 0.055, { size: Math.max(12, big * 0.028), weight: '600' });
+      return;
+    }
+    // scoreboard
+    this.karts.forEach((k, i) => {
+      const x = 16, y = 14 + i * 26;
+      ctx.fillStyle = k.color; ctx.fillRect(x, y + 3, 14, 14);
+      t(`${k.name}  ${'●'.repeat(k.wins)}${'○'.repeat(WINS - k.wins)}`, x + 22, y, { align: 'left', size: 15, color: k.out && this.state === 'fight' ? 'rgba(255,255,255,.4)' : '#ffffff' });
+    });
+    const me = this.karts[0];
+    if (this.state === 'fight' && !me.out) {
+      const ready = me.cd <= 0;
+      t(ready ? 'DASH READY' : 'dash…', W / 2, H - 40, { size: 14, color: ready ? '#8dffa8' : 'rgba(255,255,255,.5)' });
+    }
+    if (this.state === 'count') t(this.countT > 0.4 ? String(Math.ceil(this.countT - 0.4)) : 'BUMP!', W / 2, H * 0.3, { size: big * 0.14, color: '#ffe066' });
+    if (this.msg) t(this.msg.text, W / 2, H * 0.18, { size: Math.max(18, big * 0.05), color: '#ffe066', alpha: Math.min(1, this.msg.t * 2) });
+    if (this.state === 'over') {
+      ctx.fillStyle = 'rgba(20,24,50,.7)'; ctx.fillRect(0, H * 0.34, W, H * 0.3);
+      t(this.champ.you ? 'CHAMPION OF THE RING!' : `${this.champ.name.toUpperCase()} TAKES THE MATCH`, W / 2, H * 0.37, { size: big * 0.07, color: this.champ.you ? '#ffe066' : '#ffffff' });
+      t(this.champ.you ? `won in ${this.round} rounds${this.newBest ? ' · new best!' : ''}` : 'better luck next time', W / 2, H * 0.37 + big * 0.09, { size: Math.max(14, big * 0.034), weight: '600' });
+      if (this.time - this.overAt > 1.2) t('Enter or tap to play again', W / 2, H * 0.37 + big * 0.15, { size: Math.max(13, big * 0.03), weight: '600' });
+    }
+  }
+}
+
+game.start(new Arena());
+window.bumperRing = game;
+</script>
+</body>
+</html>

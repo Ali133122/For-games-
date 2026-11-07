@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Pipe Flow</title>
+<style>html, body { margin: 0; height: 100%; background: #10202e; overflow: hidden; } canvas { display: block; width: 100%; height: 100%; }</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="../flint/flint.js"></script>
+<script>
+'use strict';
+// Pipe Flow: turn the pipes to lead the water from the tap to the drain before it starts flowing. Built with Flint.
+const { Game, Scene, text, store, clamp, damp, random, randInt, pick } = Flint;
+
+const W = 360, H = 240;
+const game = new Game({ canvas: '#game', width: W, height: H, background: '#10202e', letterbox: '#10202e', touchButtons: [] });
+game.input.bind('turn', ['Space', 'Enter', 'PadA']);
+game.input.bind('flow', ['KeyF', 'PadX']);
+
+// openings as bits: N=1, E=2, S=4, W=8
+const N = 1, E = 2, S = 4, Wb = 8, DIRS = [[N, 0, -1, S], [E, 1, 0, Wb], [S, 0, 1, N], [Wb, -1, 0, E]];
+const rot = (m) => ((m << 1) | (m >> 3)) & 15;
+const LEVELS = [{ c: 6, r: 4, wait: 22, speed: 0.9 }, { c: 7, r: 5, wait: 22, speed: 0.8 }, { c: 8, r: 5, wait: 20, speed: 0.72 }, { c: 9, r: 6, wait: 20, speed: 0.65 }];
+
+function makeBoard(c, r) {
+  // a random route from the tap (left edge) to the drain (right edge), with no tile visited twice
+  const sr = randInt(0, r - 1);
+  let path = null;
+  for (let tries = 0; tries < 200 && !path; tries++) {
+    const seen = new Set([`0,${sr}`]), p = [[0, sr]];
+    let budget = 4000;
+    const walk = () => {
+      if (--budget < 0) return false;
+      const [x, y] = p[p.length - 1];
+      if (x === c - 1 && p.length > c) return true;
+      for (const [, dx, dy] of random.shuffle(DIRS.slice())) {
+        const nx = x + dx, ny = y + dy, k = `${nx},${ny}`;
+        if (nx < 0 || ny < 0 || nx >= c || ny >= r || seen.has(k)) continue;
+        seen.add(k); p.push([nx, ny]);
+        if (p.length < c * r * 0.75 && walk()) return true;
+        p.pop();
+      }
+      return false;
+    };
+    if (walk()) path = p;
+  }
+  if (!path) { path = []; for (let x = 0; x < c; x++) path.push([x, sr]); } // straight fallback, practically never needed
+  const grid = Array.from({ length: r }, () => new Array(c).fill(0));
+  path.forEach(([x, y], i) => {
+    let m = 0;
+    const link = (ox, oy) => { for (const [bit, dx, dy] of DIRS) if (x + dx === ox && y + dy === oy) m |= bit; };
+    if (i === 0) m |= Wb; else link(...path[i - 1]);
+    if (i === path.length - 1) m |= E; else link(...path[i + 1]);
+    grid[y][x] = m;
+  });
+  // everything else is a random straight, bend or cross
+  for (let y = 0; y < r; y++) for (let x = 0; x < c; x++) if (!grid[y][x]) grid[y][x] = pick([5, 10, 3, 6, 12, 9, 5, 3, 15]);
+  const tiles = grid.map((row, y) => row.map((m, x) => {
+    let mm = m; const turns = m === 15 ? 0 : randInt(0, 3);
+    for (let i = 0; i < turns; i++) mm = rot(mm);
+    return { x, y, m: mm, ang: 0, water: 0, from: 0, locked: false };
+  }));
+  return { tiles, sr, er: path[path.length - 1][1], pathLen: path.length };
+}
+
+class Play extends Scene {
+  enter() { this.state = 'title'; this.best = store.get('pipeflow:best', 0); this.cur = { x: 0, y: 0 }; this.kbd = false; }
+  begin() { Object.assign(this, { score: 0, level: 0, lives: 3 }); this.load(); this.audio.sfx('select'); }
+  load() {
+    const L = LEVELS[Math.min(this.level, LEVELS.length - 1)];
+    const extra = Math.max(0, this.level - LEVELS.length + 1);
+    this.L = { c: L.c, r: L.r, wait: Math.max(12, L.wait - extra * 2), speed: Math.max(0.4, L.speed - extra * 0.05) };
+    Object.assign(this, makeBoard(L.c, L.r));
+    this.ts = Math.floor(Math.min((W - 60) / L.c, (H - 50) / L.r));
+    this.ox = Math.floor((W - this.ts * L.c) / 2); this.oy = 30 + Math.floor((H - 34 - this.ts * L.r) / 2);
+    this.wait = this.L.wait; this.state = 'play'; this.flowing = false; this.head = null; this.filled = 0;
+    this.banner = { text: `PIPES ${this.level + 1}`, t: 1.4 };
+  }
+  tileAt(px, py) { const x = Math.floor((px - this.ox) / this.ts), y = Math.floor((py - this.oy) / this.ts); return this.tiles[y] && this.tiles[y][x]; }
+  turn(t) {
+    if (!t || t.locked || t.m === 15) return;
+    t.m = rot(t.m); t.ang -= Math.PI / 2;
+    this.audio.tone({ freq: 380 + (t.x + t.y) * 15, dur: 0.05, type: 'triangle', vol: 0.08 });
+  }
+  startFlow() {
+    if (this.flowing) return;
+    this.flowing = true;
+    this.score += Math.ceil(this.wait) * 5; // bonus for not waiting
+    const t = this.tiles[this.sr][0];
+    this.enter2(t, Wb);
+    this.audio.noise({ dur: 0.6, vol: 0.12, freq: 600, to: 1500, filter: 'bandpass' });
+  }
+  enter2(t, fromBit) {
+    if (!(t.m & fromBit)) return this.leak(t);
+    t.locked = true; t.from = fromBit; t.water = 0; this.head = t;
+  }
+  exitBit(t) { if (t.m === 15) return { [N]: S, [S]: N, [E]: Wb, [Wb]: E }[t.from]; return t.m & ~t.from; }
+  leak(t) {
+    this.state = 'leak'; this.leakAt = this.time; this.flowing = false;
+    this.lives--;
+    this.audio.sfx('hurt'); this.camera.shake(3, 0.3);
+    if (t) this.particles.emit(this.ox + t.x * this.ts + this.ts / 2, this.oy + t.y * this.ts + this.ts / 2, { count: 30, speed: [20, 80], life: [0.4, 0.8], color: ['#4dd9e8', '#bff4ff'], gravity: 150 });
+    this.timers.after(1.6, () => {
+      if (this.lives <= 0) { this.state = 'over'; this.overAt = this.time; this.newBest = this.score > this.best; if (this.newBest) { this.best = this.score; store.set('pipeflow:best', this.best); } this.audio.sfx('lose'); }
+      else this.load();
+    });
+  }
+  update(dt) {
+    const input = this.input, p = input.pointer;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    if (this.state === 'title' || this.state === 'over') {
+      if (this.time > 0.4 && (input.pressed('turn') || p.pressed) && (this.state === 'title' || this.time - this.overAt > 1)) this.begin();
+      return;
+    }
+    if (this.tiles) for (const row of this.tiles) for (const t of row) t.ang = damp(t.ang, 0, 18, dt);
+    if (this.state !== 'play') return;
+    const L = this.L;
+    if (input.pressed('left')) { this.kbd = true; this.cur.x = clamp(this.cur.x - 1, 0, L.c - 1); }
+    if (input.pressed('right')) { this.kbd = true; this.cur.x = clamp(this.cur.x + 1, 0, L.c - 1); }
+    if (input.pressed('up')) { this.kbd = true; this.cur.y = clamp(this.cur.y - 1, 0, L.r - 1); }
+    if (input.pressed('down')) { this.kbd = true; this.cur.y = clamp(this.cur.y + 1, 0, L.r - 1); }
+    if (input.pressed('turn')) this.turn(this.tiles[this.cur.y][this.cur.x]);
+    if (p.pressed) {
+      if (p.y < 26 && p.x > W - 90 && !this.flowing) this.startFlow();
+      else { const t = this.tileAt(p.x, p.y); if (t) { this.kbd = false; this.cur = { x: t.x, y: t.y }; this.turn(t); } }
+    }
+    if (input.pressed('flow')) this.startFlow();
+    if (!this.flowing) { this.wait -= dt; if (this.wait <= 0) { this.wait = 0; this.startFlow(); } return; }
+    // water moves along the pipes
+    const h = this.head;
+    h.water += dt / L.speed;
+    if (h.water >= 1) {
+      h.water = 1; this.filled++; this.score += 10;
+      this.audio.tone({ freq: 300 + this.filled * 18, dur: 0.07, type: 'sine', vol: 0.08 });
+      const out = this.exitBit(h), d = DIRS.find((q) => q[0] === out);
+      const nx = h.x + d[1], ny = h.y + d[2];
+      if (nx === L.c && ny === this.er && out === E) return this.win();
+      const next = this.tiles[ny] && this.tiles[ny][nx];
+      if (!next) return this.leak(h);
+      if (next.locked && next.m !== 15) return this.leak(next);
+      this.enter2(next, d[3]);
+    }
+  }
+  win() {
+    this.state = 'won'; this.flowing = false;
+    const bonus = 100 + this.level * 50; this.score += bonus;
+    this.banner = { text: `DRAINED! +${bonus}`, t: 1.6 };
+    this.audio.sfx('win');
+    this.timers.after(1.8, () => { this.level++; this.load(); });
+  }
+  drawPipe(ctx, t, cx, cy, s) {
+    const half = s / 2, w = s * 0.32;
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(t.ang);
+    const arms = DIRS.filter(([bit]) => t.m & bit);
+    ctx.fillStyle = t.locked ? '#5f7b8c' : '#8aa3b2';
+    ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill();
+    for (const [, dx, dy] of arms) { ctx.fillRect(dx ? (dx > 0 ? 0 : -half) : -w / 2, dy ? (dy > 0 ? 0 : -half) : -w / 2, dx ? half : w, dy ? half : w); }
+    ctx.fillStyle = '#c9d8e2';
+    for (const [, dx, dy] of arms) ctx.fillRect(dx ? (dx > 0 ? half - 3 : -half) : -w / 2 - 2, dy ? (dy > 0 ? half - 3 : -half) : -w / 2 - 2, dx ? 3 : w + 4, dy ? 3 : w + 4);
+    ctx.restore();
+    if (t.water > 0) {
+      // water fills from the entry side to the middle, then out of the exit
+      const ww = w * 0.55, from = DIRS.find((q) => q[0] === t.from), outBit = this.exitBit(t), to = DIRS.find((q) => q[0] === outBit);
+      ctx.fillStyle = '#4dd9e8';
+      const seg = (d, k, inward) => {
+        const len = half * k, sx = d[1] * (inward ? half : 0), sy = d[2] * (inward ? half : 0), ex = inward ? d[1] * (half - len) : d[1] * len, ey = inward ? d[2] * (half - len) : d[2] * len;
+        const x0 = Math.min(sx, ex), y0 = Math.min(sy, ey);
+        ctx.fillRect(cx + (d[1] ? x0 : -ww / 2), cy + (d[2] ? y0 : -ww / 2), d[1] ? Math.abs(ex - sx) || 0.01 : ww, d[2] ? Math.abs(ey - sy) || 0.01 : ww);
+      };
+      seg(from, clamp(t.water * 2, 0, 1), true);
+      if (t.water > 0.5 && to) seg(to, clamp(t.water * 2 - 1, 0, 1), false);
+      if (t.water > 0.45) { ctx.beginPath(); ctx.arc(cx, cy, ww / 2, 0, Math.PI * 2); ctx.fill(); }
+    }
+  }
+  drawBackground(ctx) {
+    ctx.fillStyle = '#10202e'; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(255,255,255,.03)';
+    for (let x = 0; x < W; x += 12) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  }
+  drawWorld(ctx) {
+    if (!this.tiles || this.state === 'title') return;
+    const s = this.ts, L = this.L;
+    ctx.fillStyle = '#1a3142'; ctx.fillRect(this.ox - 4, this.oy - 4, s * L.c + 8, s * L.r + 8);
+    for (const row of this.tiles) for (const t of row) {
+      const x = this.ox + t.x * s, y = this.oy + t.y * s;
+      ctx.fillStyle = (t.x + t.y) % 2 ? '#22404f' : '#1f3b49'; ctx.fillRect(x, y, s, s);
+      this.drawPipe(ctx, t, x + s / 2, y + s / 2, s);
+    }
+    // tap and drain
+    const ty = this.oy + this.sr * s + s / 2, dy = this.oy + this.er * s + s / 2;
+    ctx.fillStyle = '#e8c04a'; ctx.fillRect(this.ox - 20, ty - 6, 16, 12); ctx.fillRect(this.ox - 24, ty - 12, 6, 14);
+    ctx.fillStyle = '#4a5a66'; ctx.beginPath(); ctx.arc(this.ox + s * L.c + 12, dy, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#10202e'; ctx.beginPath(); ctx.arc(this.ox + s * L.c + 12, dy, 4, 0, Math.PI * 2); ctx.fill();
+    if (this.kbd && this.state === 'play') { ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 2; ctx.strokeRect(this.ox + this.cur.x * s + 1, this.oy + this.cur.y * s + 1, s - 2, s - 2); }
+  }
+  drawUI(ctx) {
+    const t = (str, x, y, o) => text(ctx, str, x, y, Object.assign({ size: 8, color: '#e6f4fa', weight: '700', font: 'system-ui, -apple-system, "Segoe UI", sans-serif' }, o));
+    if (this.state === 'title') {
+      t('PIPE FLOW', W / 2, 46, { size: 26, align: 'center', weight: '900', color: '#4dd9e8' });
+      t('turn the pipes so the water runs from the tap to the drain', W / 2, 86, { size: 9, align: 'center', weight: '500' });
+      t('the water starts on its own when the timer runs out · start it early for bonus points', W / 2, 102, { size: 7, align: 'center', weight: '500', color: '#9bb8c8' });
+      t('click or tap a pipe to turn it · or arrow keys and Space · F starts the water', W / 2, 116, { size: 7, align: 'center', weight: '500', color: '#9bb8c8' });
+      [3, 5, 6, 15, 12].forEach((m, i) => this.drawPipe(ctx, { m, ang: Math.sin(this.time * 2 + i) * 0.3, water: 0 }, W / 2 - 80 + i * 40, 150, 30));
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to start', W / 2, 184, { size: 9, align: 'center', color: '#ffe066' });
+      if (this.best) t(`best ${this.best}`, W / 2, 202, { size: 8, align: 'center', color: '#8dffa8' });
+      return;
+    }
+    t(`${this.score}`, 10, 8, { size: 11 });
+    t(`level ${this.level + 1} · ${'♥'.repeat(Math.max(0, this.lives))}`, 70, 10, { size: 8, color: '#9bb8c8' });
+    if (this.state === 'play') {
+      if (!this.flowing) {
+        ctx.fillStyle = '#2a6a80'; ctx.fillRect(W - 92, 4, 86, 18);
+        t(`water in ${Math.ceil(this.wait)}s · F`, W - 49, 9, { size: 8, align: 'center' });
+      } else t('flowing…', W - 10, 9, { size: 8, align: 'right', color: '#4dd9e8' });
+    }
+    if (this.banner) t(this.banner.text, W / 2, 9, { size: 10, align: 'center', color: '#ffe066', alpha: Math.min(1, this.banner.t * 2) });
+    if (this.state === 'leak') t(this.lives > 0 ? 'LEAK! try a new board' : 'LEAK!', W / 2, H / 2 - 8, { size: 16, align: 'center', color: '#ff7a8a' });
+    if (this.state === 'over') {
+      ctx.fillStyle = 'rgba(16,32,46,.85)'; ctx.fillRect(0, 70, W, 90);
+      t('OUT OF PLUMBERS', W / 2, 82, { size: 16, align: 'center', color: '#ff7a8a' });
+      t(`score ${this.score} · reached level ${this.level + 1}${this.newBest ? ' · new best!' : `   best ${this.best}`}`, W / 2, 108, { size: 9, align: 'center' });
+      if (this.time - this.overAt > 1) t('Space or tap to play again', W / 2, 132, { size: 9, align: 'center', color: '#ffe066' });
+    }
+  }
+}
+
+game.start(new Play());
+window.pipeFlow = game;
+</script>
+</body>
+</html>

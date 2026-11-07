@@ -9,7 +9,7 @@
 //   color    the cabinet's neon color
 //   tagline  one line under the title
 //   controls how to play, shown when you walk up to the cabinet
-//   room     1 = main floor (the default), 2 = the back room, through the glowing doorway
+//   room     1 = main floor (the default), 2 = the back room, 3 = the sky deck (walk through the glowing doorways)
 window.ARCADE_GAMES = [
   {
     title: 'Orb Rush',
@@ -130,5 +130,37 @@ window.ARCADE_GAMES = [
     tagline: 'Pop three or more of a color',
     controls: 'Aim with the mouse or ←/→ · click or Space shoots',
     room: 2,
+  },
+  {
+    title: 'Neon Maze',
+    path: 'neon-maze/index.html',
+    color: '#29e3ff',
+    tagline: '3D: find the orbs, dodge the sentry',
+    controls: 'WASD move · drag or ←/→ to look',
+    room: 3,
+  },
+  {
+    title: 'Bumper Ring',
+    path: 'bumper-ring/index.html',
+    color: '#ff4f5a',
+    tagline: '3D: shove rivals off the floating ring',
+    controls: 'WASD / arrows move · Space dash',
+    room: 3,
+  },
+  {
+    title: 'Pipe Flow',
+    path: 'pipe-flow/index.html',
+    color: '#4dd9e8',
+    tagline: 'Turn the pipes before the water comes',
+    controls: 'Click or tap pipes · or arrows and Space',
+    room: 3,
+  },
+  {
+    title: 'Cloud Hopper',
+    path: 'cloud-hopper/index.html',
+    color: '#ff8a5a',
+    tagline: 'Bounce up the clouds as high as you can',
+    controls: '←/→ or mouse · the sides wrap around',
+    room: 3,
   },
 ];

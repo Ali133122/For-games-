@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Neon Maze</title>
+<style>html, body { margin: 0; height: 100%; background: #05040a; overflow: hidden; }</style>
+</head>
+<body>
+<script src="../flint/flint.js"></script>
+<script src="../flint/flint3d.js"></script>
+<script>
+'use strict';
+// Neon Maze: find every orb in the maze before the clock runs out, and keep away from the sentry. Built with Flint3D.
+const { Game3D, Scene3D, Geometry, Texture, Material, Node, mesh, Collide3D } = Flint3D;
+const { text, store, clamp, damp, rand, pick, random } = Flint;
+
+const game = new Game3D({ touchButtons: [] });
+const inp = game.input;
+inp.bind('fwd', ['KeyW', 'ArrowUp', 'PadUp']);
+inp.bind('back', ['KeyS', 'ArrowDown', 'PadDown']);
+inp.bind('strafeL', ['KeyA', 'PadLeft']);
+inp.bind('strafeR', ['KeyD', 'PadRight']);
+inp.bind('turnL', ['ArrowLeft', 'KeyQ', 'PadL']);
+inp.bind('turnR', ['ArrowRight', 'KeyE', 'PadR']);
+inp.bind('go', ['Enter', 'Space', 'PadA', 'Pointer']);
+
+const CELL = 4, WALL_H = 3;
+function makeMaze(n) {
+  // recursive backtracker; walls[y][x] = { e: wall on the east side, s: wall on the south side }
+  const walls = Array.from({ length: n }, () => Array.from({ length: n }, () => ({ e: true, s: true })));
+  const seen = new Set(['0,0']), stack = [[0, 0]];
+  while (stack.length) {
+    const [x, y] = stack[stack.length - 1];
+    const next = random.shuffle([[1, 0], [-1, 0], [0, 1], [0, -1]]).map(([dx, dy]) => [x + dx, y + dy]).find(([nx, ny]) => nx >= 0 && ny >= 0 && nx < n && ny < n && !seen.has(nx + ',' + ny));
+    if (!next) { stack.pop(); continue; }
+    const [nx, ny] = next;
+    if (nx > x) walls[y][x].e = false; else if (nx < x) walls[y][nx].e = false; else if (ny > y) walls[y][x].s = false; else walls[ny][x].s = false;
+    seen.add(nx + ',' + ny); stack.push(next);
+  }
+  // knock out a few extra walls so there are loops (and more than one way to dodge the sentry)
+  for (let i = 0; i < n; i++) { const x = Flint.randInt(0, n - 2), y = Flint.randInt(0, n - 2); if (Math.random() < 0.5) walls[y][x].e = false; else walls[y][x].s = false; }
+  return walls;
+}
+const open = (walls, n, x, y, dx, dy) => {
+  const nx = x + dx, ny = y + dy;
+  if (nx < 0 || ny < 0 || nx >= n || ny >= n) return false;
+  if (dx === 1) return !walls[y][x].e; if (dx === -1) return !walls[y][nx].e;
+  if (dy === 1) return !walls[y][x].s; return !walls[ny][x].s;
+};
+const floorTex = Texture.canvas(128, 128, (g, w) => {
+  g.fillStyle = '#0c0a18'; g.fillRect(0, 0, w, w);
+  g.strokeStyle = 'rgba(122,44,255,.5)'; g.lineWidth = 2; g.strokeRect(1, 1, w - 2, w - 2);
+}, { repeat: true });
+const wallTex = Texture.canvas(128, 128, (g, w) => {
+  g.fillStyle = '#2a2350'; g.fillRect(0, 0, w, w);
+  g.fillStyle = '#352c64'; for (let y = 0; y < w; y += 16) g.fillRect(0, y, w, 2);
+  g.fillStyle = '#29e3ff'; g.fillRect(0, 0, w, 4);
+}, { repeat: true });
+
+class Maze extends Scene3D {
+  enter() {
+    Object.assign(this.env, { background: '#05040a', fog: [7, 22], fogColor: '#05040a', sky: '#6a60a0', ground: '#2a2440', sunIntensity: 0.25 });
+    this.camera.fov = 72;
+    this.best = store.get('neonmaze:best', 0);
+    this.look = { dx: 0, dy: 0 }; this.stick = null; this.taps = 0;
+    this.attachPointer();
+    this.level = 0;
+    this.build(7);
+    this.state = 'title';
+  }
+  exit() { this.detachPointer(); }
+  build(n) {
+    this.root.children.slice().forEach((c) => c.destroy());
+    this.env.lights = [];
+    this.n = n; this.walls = makeMaze(n);
+    const size = n * CELL;
+    this.add(mesh(Geometry.plane(size, size, n, n), { map: floorTex }, { position: [size / 2, 0, size / 2] }));
+    this.add(mesh(Geometry.plane(size, size), { color: '#08060f' }, { position: [size / 2, WALL_H, size / 2], rotation: [Math.PI, 0, 0] }));
+    const parts = [], colliders = [], T = 0.4;
+    const wall = (x, z, w, d) => { parts.push({ geometry: Geometry.box(w, WALL_H, d), position: [x, WALL_H / 2, z] }); colliders.push({ x, z, w, d }); };
+    wall(size / 2, 0, size + T, T); wall(0, size / 2, T, size + T);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const c = this.walls[y][x];
+      if (c.e) wall((x + 1) * CELL, (y + 0.5) * CELL, T, CELL + T);
+      if (c.s) wall((x + 0.5) * CELL, (y + 1) * CELL, CELL + T, T);
+    }
+    this.add(mesh(Geometry.merge(parts), { map: wallTex }));
+    this.colliders = colliders;
+    // orbs in far-flung cells, each with its own glow
+    const cells = [];
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (x + y > 2) cells.push([x, y]);
+    const count = 5 + this.level * 2;
+    this.orbs = random.shuffle(cells).slice(0, count).map(([x, y], i) => {
+      const color = ['#ffd23f', '#ff3fb0', '#8dffa8', '#29e3ff'][i % 4];
+      const node = this.add(mesh(Geometry.gem(0.35), { color: '#fff', emissive: color, emissiveIntensity: 0.9 }, { position: [(x + 0.5) * CELL, 1.3, (y + 0.5) * CELL] }));
+      const light = { position: node.position, color, intensity: 1.4, range: 6 };
+      this.env.lights.push(light);
+      return { node, light, x: (x + 0.5) * CELL, z: (y + 0.5) * CELL, got: false };
+    });
+    // the sentry: a red eye that patrols the corridors and hunts you when it sees you
+    const s = this.add(new Node());
+    s.add(mesh(Geometry.sphere(0.45, 16, 12), { color: '#200', emissive: '#ff3040', emissiveIntensity: 0.8 }));
+    s.add(mesh(Geometry.cylinder(0.75, 0.75, 0.05, 20, false), { color: '#000', emissive: '#ff3040', doubleSided: true }, { rotation: [Math.PI / 2, 0, 0] }));
+    const sx = n - 1, sy = n - 1;
+    this.sentry = { node: s, cx: sx, cy: sy, tx: sx, ty: sy, x: (sx + 0.5) * CELL, z: (sy + 0.5) * CELL, speed: 2.6 + this.level * 0.35, hunting: 0 };
+    this.sentryLight = { position: s.position, color: '#ff3040', intensity: 1.2, range: 5 };
+    this.env.lights.push(this.sentryLight);
+    // your own glow, so the corridor around you is always lit
+    this.headLight = { position: { x: 0, y: 2, z: 0 }, color: '#b8c8ff', intensity: 1.3, range: 9 };
+    this.env.lights.push(this.headLight);
+    this.pos = { x: CELL / 2, z: CELL / 2 }; this.yaw = Math.PI; this.pitch = 0; this.vel = { x: 0, z: 0 };
+    this.seen = new Set(['0,0']);
+    this.placeCamera(0);
+  }
+  begin() { this.level = 0; this.score = 0; this.build(7); this.timeLeft = 75; this.state = 'play'; this.hurtT = 0; this.audio.sfx('select'); }
+  attachPointer() {
+    const el = this.game.canvas, ptrs = new Map();
+    this._down = (e) => {
+      const p = this.game.toLogical(e.clientX, e.clientY), role = e.pointerType === 'touch' && p.x < this.width * 0.45 ? 'move' : 'look';
+      ptrs.set(e.pointerId, { role, sx: p.x, sy: p.y, x: p.x, y: p.y });
+      if (role === 'move') this.stick = { x: p.x, y: p.y, dx: 0, dy: 0 };
+    };
+    this._move = (e) => {
+      const s = ptrs.get(e.pointerId); if (!s) return;
+      const p = this.game.toLogical(e.clientX, e.clientY);
+      if (s.role === 'look') { this.look.dx += p.x - s.x; this.look.dy += p.y - s.y; }
+      else if (this.stick) { this.stick.dx = clamp(p.x - s.sx, -50, 50); this.stick.dy = clamp(p.y - s.sy, -50, 50); }
+      s.x = p.x; s.y = p.y;
+    };
+    this._up = (e) => { const s = ptrs.get(e.pointerId); if (!s) return; ptrs.delete(e.pointerId); if (s.role === 'move') this.stick = null; };
+    el.addEventListener('pointerdown', this._down);
+    addEventListener('pointermove', this._move); addEventListener('pointerup', this._up); addEventListener('pointercancel', this._up);
+  }
+  detachPointer() { this.game.canvas.removeEventListener('pointerdown', this._down); removeEventListener('pointermove', this._move); removeEventListener('pointerup', this._up); removeEventListener('pointercancel', this._up); }
+  placeCamera(bob) { this.camera.position.set(this.pos.x, 1.55 + bob, this.pos.z); this.camera.setYawPitch(this.yaw, this.pitch); if (this.headLight) this.headLight.position = { x: this.pos.x, y: 2, z: this.pos.z }; }
+  cellOf(x, z) { return [clamp(Math.floor(x / CELL), 0, this.n - 1), clamp(Math.floor(z / CELL), 0, this.n - 1)]; }
+  canSee(ax, ay, bx, by) {
+    // straight line of sight along a row or column with no walls between
+    if (ax === bx) { const s = Math.sign(by - ay); for (let y = ay; y !== by; y += s) if (!open(this.walls, this.n, ax, y, 0, s)) return false; return true; }
+    if (ay === by) { const s = Math.sign(bx - ax); for (let x = ax; x !== bx; x += s) if (!open(this.walls, this.n, x, ay, s, 0)) return false; return true; }
+    return false;
+  }
+  pathStep(fx, fy, tx, ty) {
+    // breadth-first search through the maze, returns the first cell to move to
+    const key = (x, y) => x + ',' + y, prev = new Map([[key(fx, fy), null]]), q = [[fx, fy]];
+    while (q.length) {
+      const [x, y] = q.shift();
+      if (x === tx && y === ty) break;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (open(this.walls, this.n, x, y, dx, dy) && !prev.has(key(x + dx, y + dy))) { prev.set(key(x + dx, y + dy), [x, y]); q.push([x + dx, y + dy]); }
+    }
+    let cur = [tx, ty];
+    if (!prev.has(key(tx, ty))) return [fx, fy];
+    while (prev.get(key(...cur)) && (prev.get(key(...cur))[0] !== fx || prev.get(key(...cur))[1] !== fy)) cur = prev.get(key(...cur));
+    return cur;
+  }
+  update(dt) {
+    const input = this.input, t = this.time;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    for (const o of this.orbs) if (!o.got) { o.node.rotation.y += dt * 2; o.node.position.y = 1.3 + Math.sin(t * 2 + o.x) * 0.12; }
+    this.sentry.node.rotation.y += dt * 3;
+    this.camera.fov = this.width < this.height ? 88 : 72;
+    if (this.state !== 'play') {
+      this.yaw += dt * 0.25; this.placeCamera(0);
+      if (this.time > 0.5 && input.pressed('go') && (this.state === 'title' || this.time - this.overAt > 1.2)) this.begin();
+      this.look.dx = this.look.dy = 0;
+      return;
+    }
+    this.timeLeft -= dt; this.hurtT = Math.max(0, this.hurtT - dt);
+    if (this.timeLeft <= 0) { this.timeLeft = 0; return this.end(); }
+    // look and move, like the arcade itself
+    this.yaw += this.look.dx * 0.0045 + input.axis('turnL', 'turnR') * 2.3 * dt;
+    this.pitch = clamp(this.pitch - this.look.dy * 0.0035, -0.9, 0.9);
+    this.look.dx = this.look.dy = 0;
+    let f = input.axis('back', 'fwd') - input.stick.y, s = input.axis('strafeL', 'strafeR') + input.stick.x;
+    if (this.stick) { f -= this.stick.dy / 50; s += this.stick.dx / 50; }
+    const len = Math.hypot(f, s); if (len > 1) { f /= len; s /= len; }
+    const fx = Math.sin(this.yaw), fz = -Math.cos(this.yaw), rx = Math.cos(this.yaw), rz = Math.sin(this.yaw), speed = 4.2;
+    this.vel.x = damp(this.vel.x, (fx * f + rx * s) * speed, 12, dt); this.vel.z = damp(this.vel.z, (fz * f + rz * s) * speed, 12, dt);
+    Collide3D.slideXZ(this.pos, 0.4, this.vel.x * dt, this.vel.z * dt, this.colliders);
+    this.placeCamera(Math.abs(Math.sin(t * 9)) * 0.04 * Math.min(1, Math.hypot(this.vel.x, this.vel.z) / 3));
+    const [cx, cy] = this.cellOf(this.pos.x, this.pos.z);
+    this.seen.add(cx + ',' + cy);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (open(this.walls, this.n, cx, cy, dx, dy)) this.seen.add(cx + dx + ',' + (cy + dy));
+    // orbs
+    for (const o of this.orbs) if (!o.got && Math.hypot(o.x - this.pos.x, o.z - this.pos.z) < 1.1) {
+      o.got = true; o.node.visible = false; o.light.intensity = 0; this.timeLeft += 6; this.score += 100;
+      this.audio.sfx('coin');
+      this.particles.emit({ x: o.x, y: 1.3, z: o.z }, { count: 30, speed: [1, 4], life: [0.4, 0.8], color: [o.light.color, '#ffffff'], size: [0.04, 0.1] });
+      if (this.orbs.every((q) => q.got)) return this.nextLevel();
+    }
+    // sentry: wanders cell to cell; if it can see you down a corridor, it hunts you for a while
+    const se = this.sentry, [sx, sy] = this.cellOf(se.x, se.z);
+    if (this.canSee(sx, sy, cx, cy) && Math.abs(sx - cx) + Math.abs(sy - cy) < 7) { if (!se.hunting) this.audio.tone({ freq: 220, to: 440, dur: 0.3, type: 'sawtooth', vol: 0.08 }); se.hunting = 4; }
+    se.hunting = Math.max(0, se.hunting - dt);
+    const tx = (se.tx + 0.5) * CELL, tz = (se.ty + 0.5) * CELL, d = Math.hypot(tx - se.x, tz - se.z), sp = se.speed * (se.hunting ? 1.35 : 1);
+    if (d < 0.05) {
+      if (se.hunting) [se.tx, se.ty] = this.pathStep(se.tx, se.ty, cx, cy);
+      else { const opts = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dy]) => open(this.walls, this.n, se.tx, se.ty, dx, dy)); const back = opts.length > 1 ? opts.filter(([dx, dy]) => se.tx + dx !== se.cx || se.ty + dy !== se.cy) : opts; const [dx, dy] = pick(back); se.cx = se.tx; se.cy = se.ty; se.tx += dx; se.ty += dy; }
+    } else { const k = Math.min(1, (sp * dt) / d); se.x += (tx - se.x) * k; se.z += (tz - se.z) * k; }
+    se.node.position.set(se.x, 1.4 + Math.sin(t * 3) * 0.1, se.z);
+    this.sentryLight.intensity = se.hunting ? 2 : 1.2;
+    if (Math.hypot(se.x - this.pos.x, se.z - this.pos.z) < 0.9 && this.hurtT <= 0) {
+      this.timeLeft -= 10; this.hurtT = 2; this.camera.shake(0.25, 0.4); this.audio.sfx('hurt');
+      // the sentry gets knocked back to the far corner
+      se.tx = se.cx = this.n - 1 - cx > cx ? this.n - 1 : 0; se.ty = se.cy = this.n - 1 - cy > cy ? this.n - 1 : 0; se.x = (se.tx + 0.5) * CELL; se.z = (se.ty + 0.5) * CELL; se.hunting = 0;
+    }
+  }
+  nextLevel() {
+    this.level++; this.score += Math.round(this.timeLeft) * 10;
+    this.audio.sfx('win');
+    this.msg = { text: `MAZE ${this.level} CLEARED · +${Math.round(this.timeLeft) * 10} time bonus`, t: 2.4 };
+    const keepTime = this.timeLeft;
+    this.build(Math.min(13, 7 + this.level * 2));
+    this.timeLeft = Math.max(keepTime, 45) + 30;
+  }
+  end() {
+    this.state = 'over'; this.overAt = this.time;
+    this.audio.sfx('lose');
+    this.newBest = this.score > this.best; if (this.newBest) { this.best = this.score; store.set('neonmaze:best', this.score); }
+  }
+  drawUI(ctx) {
+    const W = this.width, H = this.height, big = Math.min(W, H);
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ align: 'center', color: '#ffffff', shadow: 'rgba(0,0,0,.7)', shadowOffset: 2, font: 'ui-monospace, Menlo, Consolas, monospace', weight: '700', size: 16 }, o));
+    if (this.state === 'title') {
+      t('NEON MAZE', W / 2, H * 0.12, { size: big * 0.1, color: '#29e3ff' });
+      t('find every glowing orb before the clock runs out · each one adds 6 seconds', W / 2, H * 0.12 + big * 0.13, { size: Math.max(11, big * 0.026), weight: '500' });
+      t('the red sentry hunts you if it spots you down a corridor · a touch costs 10 seconds', W / 2, H * 0.12 + big * 0.17, { size: Math.max(11, big * 0.026), weight: '500', color: '#ff8090' });
+      t('WASD move · drag mouse or ←/→ to look · touch: left thumb walks, right thumb looks', W / 2, H * 0.12 + big * 0.21, { size: Math.max(10, big * 0.022), weight: '500', color: '#a8b8d8' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Enter or tap to enter the maze', W / 2, H * 0.84, { size: Math.max(14, big * 0.034) });
+      if (this.best) t(`best ${this.best}`, W / 2, H * 0.84 + big * 0.055, { size: Math.max(12, big * 0.028), color: '#8dffa8' });
+      return;
+    }
+    // minimap of the cells you've seen
+    const ms = Math.min(150, big * 0.3), cs = ms / this.n, mx = W - ms - 14, my = 14;
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(mx - 4, my - 4, ms + 8, ms + 8);
+    for (let y = 0; y < this.n; y++) for (let x = 0; x < this.n; x++) {
+      if (!this.seen.has(x + ',' + y)) continue;
+      ctx.fillStyle = 'rgba(122,44,255,.35)'; ctx.fillRect(mx + x * cs, my + y * cs, cs, cs);
+      ctx.fillStyle = '#29e3ff';
+      if (this.walls[y][x].e) ctx.fillRect(mx + (x + 1) * cs - 1, my + y * cs, 2, cs);
+      if (this.walls[y][x].s) ctx.fillRect(mx + x * cs, my + (y + 1) * cs - 1, cs, 2);
+      if (x === 0) ctx.fillRect(mx, my + y * cs, 2, cs);
+      if (y === 0) ctx.fillRect(mx + x * cs, my, cs, 2);
+    }
+    for (const o of this.orbs) if (!o.got && this.seen.has(this.cellOf(o.x, o.z).join(','))) { ctx.fillStyle = o.light.color; ctx.beginPath(); ctx.arc(mx + (o.x / CELL) * cs, my + (o.z / CELL) * cs, cs * 0.22, 0, Math.PI * 2); ctx.fill(); }
+    const px = mx + (this.pos.x / CELL) * cs, pz = my + (this.pos.z / CELL) * cs;
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(px + Math.sin(this.yaw) * cs * 0.45, pz - Math.cos(this.yaw) * cs * 0.45); ctx.lineTo(px + Math.cos(this.yaw) * cs * 0.25, pz + Math.sin(this.yaw) * cs * 0.25); ctx.lineTo(px - Math.cos(this.yaw) * cs * 0.25, pz - Math.sin(this.yaw) * cs * 0.25); ctx.fill();
+    const left = this.orbs.filter((o) => !o.got).length;
+    t(`${Math.ceil(this.timeLeft)}s`, 18, 14, { align: 'left', size: 26, color: this.timeLeft < 10 ? '#ff5a6a' : '#ffffff' });
+    t(`orbs left ${left}`, 18, 48, { align: 'left', size: 15, color: '#ffd23f' });
+    t(`maze ${this.level + 1} · ${this.score}`, 18, 70, { align: 'left', size: 13, weight: '500' });
+    if (this.sentry.hunting && this.state === 'play') t('THE SENTRY SEES YOU', W / 2, H - 50, { size: 15, color: '#ff5a6a', alpha: 0.6 + Math.sin(this.time * 10) * 0.4 });
+    if (this.hurtT > 1.5) { ctx.fillStyle = `rgba(255,40,60,${(this.hurtT - 1.5) * 0.6})`; ctx.fillRect(0, 0, W, H); }
+    if (this.msg) { this.msg.t -= 1 / 60; t(this.msg.text, W / 2, H * 0.3, { size: Math.max(15, big * 0.035), color: '#8dffa8', alpha: Math.min(1, this.msg.t * 2) }); if (this.msg.t <= 0) this.msg = null; }
+    if (this.state === 'play') { ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.beginPath(); ctx.arc(W / 2, H / 2, 2, 0, Math.PI * 2); ctx.fill(); }
+    if (this.stick) {
+      ctx.globalAlpha = 0.35; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(this.stick.x, this.stick.y, 50, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 0.6; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(this.stick.x + this.stick.dx, this.stick.y + this.stick.dy, 20, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    if (this.state === 'over') {
+      ctx.fillStyle = 'rgba(5,4,10,.75)'; ctx.fillRect(0, H * 0.35, W, H * 0.3);
+      t("TIME'S UP", W / 2, H * 0.38, { size: big * 0.08, color: '#ff5a6a' });
+      t(`score ${this.score} · reached maze ${this.level + 1}${this.newBest ? ' · new best!' : `   best ${this.best}`}`, W / 2, H * 0.38 + big * 0.1, { size: Math.max(13, big * 0.032), weight: '500' });
+      if (this.time - this.overAt > 1.2) t('Enter or tap to try again', W / 2, H * 0.38 + big * 0.16, { size: Math.max(12, big * 0.028), weight: '500' });
+    }
+  }
+}
+
+game.start(new Maze());
+window.neonMaze = game;
+</script>
+</body>
+</html>

@@ -66,7 +66,7 @@
 <div class="panel" id="listPanel" hidden role="dialog" aria-labelledby="listTitle">
   <h2 id="listTitle">ALL GAMES</h2>
   <div class="list" id="gameList"></div>
-  <p>Games come from <code>games.js</code>, where <code>room: 2</code> puts a game in the back room. Games you add with <b>+ Add game</b> are saved in this browser.</p>
+  <p>Games come from <code>games.js</code>, where <code>room: 2</code> puts a game in the back room and <code>room: 3</code> on the sky deck. Games you add with <b>+ Add game</b> are saved in this browser.</p>
   <div class="end"><button type="button" data-close>Close</button></div>
 </div>
 
@@ -81,7 +81,7 @@
     </div>
     <label>Tagline <input id="fTag" maxlength="40" placeholder="Bounce the comet past the moon"></label>
     <label>Controls <input id="fControls" maxlength="60" placeholder="Arrow keys move · Space fires"></label>
-    <label>Room <select id="fRoom"><option value="1">Main floor</option><option value="2">Back room</option></select></label>
+    <label>Room <select id="fRoom"><option value="1">Main floor</option><option value="2">Back room</option><option value="3">Sky deck</option></select></label>
     <p class="err" id="fErr"></p>
     <div class="end"><button type="button" data-close>Cancel</button><button class="primary" type="submit">Add cabinet</button></div>
   </form>
@@ -122,12 +122,15 @@ const hsl = (h, s, l) => {
 };
 const isTouch = () => game.input.touchActive || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
 
-// ── rooms ── each game's `room` in games.js picks one (default 1). The two rooms are joined by a doorway.
+// ── rooms ── each game's `room` in games.js picks one (default 1). The rooms form a chain:
+// each room's east doorway leads to the next room and its west doorway back to the previous one.
 const ROOMS = [
   { name: 'MAIN FLOOR', sign: 'FLINT ARCADE', sub: 'walk up to a cabinet · press E or tap to play', glow: '#ff3fb0', glow2: '#29e3ff', textColor: '#ffd6f0',
-    floor: ['#141022', '#1c1631'], dots: ['#ff3fb0', '#29e3ff', '#ffd23f', '#7a2cff'], wall: '#191427', ceiling: '#0b0913', strips: [0.92, 0.52], bg: '#07060c', sky: '#3c3560', ground: '#130f1f', center: 'gem', door: 1 },
-  { name: 'BACK ROOM', sign: 'THE BACK ROOM', sub: 'more games · the glowing doorway leads back', glow: '#29e3ff', glow2: '#8dffa8', textColor: '#d6fbff',
-    floor: ['#0b1a1f', '#10262c'], dots: ['#29e3ff', '#8dffa8', '#ffd23f', '#5aa9ff'], wall: '#0f1f27', ceiling: '#081217', strips: [0.5, 0.33], bg: '#04090b', sky: '#2c4a58', ground: '#0a1a1f', center: 'cube', door: -1 },
+    floor: ['#141022', '#1c1631'], dots: ['#ff3fb0', '#29e3ff', '#ffd23f', '#7a2cff'], wall: '#191427', ceiling: '#0b0913', strips: [0.92, 0.52], bg: '#07060c', sky: '#3c3560', ground: '#130f1f', center: 'gem' },
+  { name: 'BACK ROOM', sign: 'THE BACK ROOM', sub: 'more games · doorways lead west and east', glow: '#29e3ff', glow2: '#8dffa8', textColor: '#d6fbff',
+    floor: ['#0b1a1f', '#10262c'], dots: ['#29e3ff', '#8dffa8', '#ffd23f', '#5aa9ff'], wall: '#0f1f27', ceiling: '#081217', strips: [0.5, 0.33], bg: '#04090b', sky: '#2c4a58', ground: '#0a1a1f', center: 'cube' },
+  { name: 'SKY DECK', sign: 'THE SKY DECK', sub: 'the top floor · doorway back is to the west', glow: '#ff9a3d', glow2: '#ff5ab0', textColor: '#ffe6cc',
+    floor: ['#1e1024', '#2a1430'], dots: ['#ff9a3d', '#ff5ab0', '#ffd23f', '#b98cff'], wall: '#24122a', ceiling: '#120818', strips: [0.08, 0.86], bg: '#0e0610', sky: '#5a3050', ground: '#1a0c1c', center: 'orb' },
 ];
 const roomOf = (g) => clamp((parseInt(g.room, 10) || 1) - 1, 0, ROOMS.length - 1);
 const gamesIn = (r) => allGames().filter((g) => roomOf(g) === r);
@@ -252,9 +255,10 @@ function buildCabinet(gm, angle, radius) {
 }
 
 class Arcade extends Scene3D {
-  constructor(roomIndex = 0, viaDoor = false) { super(); this.roomIndex = roomIndex; this.viaDoor = viaDoor; }
+  // viaDoor: which wall you walk in through (1 = east, -1 = west), or 0 to start in the middle
+  constructor(roomIndex = 0, viaDoor = 0) { super(); this.roomIndex = roomIndex; this.viaDoor = viaDoor; }
   enter() {
-    const room = ROOMS[this.roomIndex], other = ROOMS[1 - this.roomIndex];
+    const room = ROOMS[this.roomIndex];
     this.room = room;
     Object.assign(this.env, { background: room.bg, fog: [7, 26], fogColor: room.bg, sky: room.sky, ground: room.ground, sunIntensity: 0.12 });
     this.camera.fov = 70;
@@ -286,27 +290,30 @@ class Arcade extends Scene3D {
     this.add(mesh(Geometry.merge(panels), new Material({ color: '#000', emissive: '#d8d0ff', emissiveIntensity: 0.55 })));
     this.add(mesh(Geometry.quad(4.4, 1.1), new Material({ map: signTex(room), unlit: true }), { position: [0, 3.05, -H + 0.02] }));
 
-    // doorway to the other room, in the east wall (main floor) or west wall (back room)
-    const side = room.door, dx = side * (H - 0.02);
-    this.door = { side, x: side * H, to: 1 - this.roomIndex, n: gamesIn(1 - this.roomIndex).length };
-    this.doorTex = doorTex();
-    drawDoor(this.doorTex, other, this.door.n, 0);
-    const doorRot = [0, -side * Math.PI / 2, 0];
-    this.add(mesh(Geometry.quad(1.6, 2.5), new Material({ map: this.doorTex, unlit: true }), { position: [dx, 1.25, 0], rotation: doorRot }));
-    const frameMat = new Material({ color: '#000', emissive: other.glow, emissiveIntensity: 1 });
-    this.doorFrame = frameMat;
-    this.add(mesh(Geometry.merge([
-      { geometry: Geometry.box(0.12, 2.7, 0.12), position: [0, 1.35, -0.86] }, { geometry: Geometry.box(0.12, 2.7, 0.12), position: [0, 1.35, 0.86] },
-      { geometry: Geometry.box(0.12, 0.12, 1.84), position: [0, 2.7, 0] },
-    ]), frameMat, { position: [side * (H - 0.06), 0, 0] }));
-    this.add(mesh(Geometry.plane(1.8, 1.6), new Material({ color: other.glow, unlit: true, opacity: 0.2, fog: false }), { position: [side * (H - 0.8), 0.012, 0] }));
-    this.env.lights.push({ position: { x: side * (H - 0.9), y: 1.8, z: 0 }, color: other.glow, intensity: 1.2, range: 4.5 });
+    // doorways: east to the next room, west back to the previous one
+    this.doors = [];
+    for (const side of [1, -1]) {
+      const to = this.roomIndex + side;
+      if (to < 0 || to >= ROOMS.length) continue;
+      const other = ROOMS[to], dx = side * (H - 0.02), door = { side, to, n: gamesIn(to).length, tex: doorTex() };
+      drawDoor(door.tex, other, door.n, 0);
+      this.add(mesh(Geometry.quad(1.6, 2.5), new Material({ map: door.tex, unlit: true }), { position: [dx, 1.25, 0], rotation: [0, -side * Math.PI / 2, 0] }));
+      door.frame = new Material({ color: '#000', emissive: other.glow, emissiveIntensity: 1 });
+      this.add(mesh(Geometry.merge([
+        { geometry: Geometry.box(0.12, 2.7, 0.12), position: [0, 1.35, -0.86] }, { geometry: Geometry.box(0.12, 2.7, 0.12), position: [0, 1.35, 0.86] },
+        { geometry: Geometry.box(0.12, 0.12, 1.84), position: [0, 2.7, 0] },
+      ]), door.frame, { position: [side * (H - 0.06), 0, 0] }));
+      this.add(mesh(Geometry.plane(1.8, 1.6), new Material({ color: other.glow, unlit: true, opacity: 0.2, fog: false }), { position: [side * (H - 0.8), 0.012, 0] }));
+      this.env.lights.push({ position: { x: side * (H - 0.9), y: 1.8, z: 0 }, color: other.glow, intensity: 1.2, range: 4.5 });
+      this.doors.push(door);
+    }
 
     // centerpiece
     this.add(mesh(Geometry.cylinder(0.8, 0.95, 0.6, 24), new Material({ color: '#1a1526' }), { position: [0, 0.3, 0] }));
     this.ring = this.add(mesh(Geometry.cylinder(0.97, 0.97, 0.06, 32, false), new Material({ color: '#000', emissive: '#ff3fb0', doubleSided: true }), { position: [0, 0.3, 0] }));
     this.gemMat = new Material({ color: '#ffffff', emissive: [1, 0.3, 0.7], emissiveIntensity: 0.7 });
-    this.gem = this.add(mesh(room.center === 'cube' ? Geometry.flat(Geometry.box(0.6, 0.6, 0.6)) : Geometry.gem(0.42), this.gemMat, { position: [0, 1.5, 0], scale: room.center === 'cube' ? [1, 1, 1] : [1, 1.5, 1] }));
+    const centerGeo = room.center === 'cube' ? Geometry.flat(Geometry.box(0.6, 0.6, 0.6)) : room.center === 'orb' ? Geometry.flat(Geometry.sphere(0.45, 8, 6)) : Geometry.gem(0.42);
+    this.gem = this.add(mesh(centerGeo, this.gemMat, { position: [0, 1.5, 0], scale: room.center === 'gem' ? [1, 1.5, 1] : [1, 1, 1] }));
     this.orbit = this.add(new Node({ position: [0, 1.5, 0] }));
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
@@ -316,9 +323,15 @@ class Arcade extends Scene3D {
     this.env.lights.push(this.centerLight);
 
     // cabinets, spread around a circle facing the middle
-    const doorAngle = side > 0 ? Math.PI / 2 : -Math.PI / 2, slot = (Math.PI * 2) / (games.length + 1);
+    const doorAngles = this.doors.map((d) => (d.side > 0 ? Math.PI / 2 : -Math.PI / 2)).sort((a, b) => a - b);
+    const arcs = doorAngles.length ? doorAngles.map((a, i) => [a, i + 1 < doorAngles.length ? doorAngles[i + 1] : doorAngles[0] + Math.PI * 2]) : [[0, Math.PI * 2]];
+    const angles = [];
+    arcs.forEach(([a0, a1], ai) => {
+      const n = Math.round(games.length / arcs.length) + (ai === 0 ? games.length - Math.round(games.length / arcs.length) * arcs.length : 0);
+      for (let i = 0; i < n; i++) angles.push(a0 + ((a1 - a0) * (i + 1)) / (n + 1));
+    });
     this.cabs = games.map((gm, i) => {
-      const angle = doorAngle + slot * (i + 1);
+      const angle = angles[i];
       const cab = buildCabinet(gm, angle, R);
       this.add(cab.group);
       this.env.lights.push(cab.light);
@@ -331,7 +344,8 @@ class Arcade extends Scene3D {
       { x: 0, z: 0, w: 1.9, d: 1.9 }, ...this.cabs.map((c) => c.box),
     ];
 
-    if (this.viaDoor) { this.pos = { x: side * (H - 1.4), z: 0 }; this.yaw = -side * Math.PI / 2; }
+    const side = this.viaDoor;
+    if (side) { this.pos = { x: side * (H - 1.4), z: 0 }; this.yaw = -side * Math.PI / 2; }
     else { this.pos = { x: 0, z: R * 0.55 }; this.yaw = 0; }
     this.pitch = -0.05; this.vel = { x: 0, z: 0 };
     this.step = 0; this.stepSfx = 0;
@@ -400,7 +414,7 @@ class Arcade extends Scene3D {
     this.screenClock -= dt;
     if (this.screenClock <= 0) {
       this.screenClock = 1 / 12;
-      drawDoor(this.doorTex, ROOMS[this.door.to], this.door.n, t);
+      for (const d of this.doors) drawDoor(d.tex, ROOMS[d.to], d.n, t);
       for (const c of this.cabs) if (Math.hypot(c.front.x - this.pos.x, c.front.z - this.pos.z) < 14) drawScreen(c.screenTex, c.gm, t, c === this.focus);
     }
     for (const c of this.cabs) {
@@ -443,19 +457,21 @@ class Arcade extends Scene3D {
       if (facing > 0.55 && front > 0.2 && score > bestScore) { best = c; bestScore = score; }
     }
     if (best !== this.focus) { this.focus = best; if (best) this.audio.sfx('blip'); }
-    this.doorFrame.emissiveIntensity = 0.8 + Math.sin(t * 3) * 0.2;
-    if (this.door.side * this.pos.x > this.half - 0.75 && Math.abs(this.pos.z) < 0.85) return this.goThroughDoor();
+    for (const d of this.doors) {
+      d.frame.emissiveIntensity = 0.8 + Math.sin(t * 3) * 0.2;
+      if (d.side * this.pos.x > this.half - 0.75 && Math.abs(this.pos.z) < 0.85) return this.goThroughDoor(d);
+    }
     if (this.focus && (input.pressed('play') || this.tapped)) this.launch(this.focus);
     this.tapped = false;
   }
 
-  goThroughDoor() {
+  goThroughDoor(door) {
     this.state = 'door';
     this.audio.sfx('powerup');
     this.audio.noise({ dur: 0.5, vol: 0.12, freq: 600, to: 3000, filter: 'bandpass' });
-    arcade = new Arcade(this.door.to, true);
-    try { sessionStorage.setItem('flint-arcade:room', String(this.door.to)); } catch (e) { /* private mode */ }
-    game.switch(arcade, { fade: 0.7, color: ROOMS[this.door.to].bg });
+    arcade = new Arcade(door.to, -door.side);
+    try { sessionStorage.setItem('flint-arcade:room', String(door.to)); } catch (e) { /* private mode */ }
+    game.switch(arcade, { fade: 0.7, color: ROOMS[door.to].bg });
   }
   launch(cab) {
     this.state = 'zoom';
@@ -506,8 +522,10 @@ class Arcade extends Scene3D {
       t(isTouch() ? 'tap to play' : 'press E or Enter to play', cx + 18, cy + 74, { size: 13, weight: '700', color: '#ffd23f' });
     }
     if (this.state === 'walk' && !this.focus) {
-      const d = this.toScreen({ x: this.door.side * (this.half - 0.05), y: 2.95, z: 0 }), dist = Math.abs(this.door.side * this.half - this.pos.x) + Math.abs(this.pos.z);
-      if (d.visible && dist < 9) t(`walk through to the ${ROOMS[this.door.to].name.toLowerCase()}`, d.x, d.y, { size: 13, align: 'center', color: '#ffffff', alpha: clamp((9 - dist) / 3, 0, 1) });
+      for (const door of this.doors) {
+        const d = this.toScreen({ x: door.side * (this.half - 0.05), y: 2.95, z: 0 }), dist = Math.abs(door.side * this.half - this.pos.x) + Math.abs(this.pos.z);
+        if (d.visible && dist < 9) t(`walk through to the ${ROOMS[door.to].name.toLowerCase()}`, d.x, d.y, { size: 13, align: 'center', color: '#ffffff', alpha: clamp((9 - dist) / 3, 0, 1) });
+      }
     }
     if (this.hintAlpha > 0 && this.state === 'walk') {
       const msg = isTouch() ? 'left thumb walks · right thumb looks · tap a cabinet' : 'WASD / arrows walk · drag mouse to look · E to play';

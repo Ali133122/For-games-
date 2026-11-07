@@ -99,7 +99,7 @@ A memory puzzle. Flip two tiles at a time to find matching pairs, across three b
 ### Drift Kart (back room)
 Open [`drift-kart/index.html`](drift-kart/index.html). A 3D game built with Flint3D.
 
-A three-lap kart race against three rivals on a tree-lined circuit.
+A three-lap kart race against three rivals on a tree-lined circuit. You start third on the grid. The rivals drive with the same kart physics as you: they follow a racing line, brake for corners, drift for boosts and go around slower karts. Pick Easy, Normal or Hard on the title screen with ←/→. The results show the full standings with everyone's finish time.
 
 - **Drive:** ↑ or W for gas, ←/→ to steer, ↓ to brake. On touch screens, use the on-screen buttons (A is gas, B is drift)
 - **Drift:** hold Space while you steer through a corner. The sparks turn blue, then orange. Let go for a boost, and the longer the drift, the bigger the boost

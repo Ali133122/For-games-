@@ -104,11 +104,38 @@ const kartBody = Geometry.merge([
 ]);
 const wheelGeo = Geometry.cylinder(0.3, 0.3, 0.3, 12), headGeo = Geometry.sphere(0.27, 12, 8);
 const KARTS = [
-  { name: 'You', color: '#ff5a3d' },
-  { name: 'Blue', color: '#3d8aff', base: 28.5, lane: -1.6 },
-  { name: 'Lime', color: '#7ad13a', base: 27.6, lane: 1.4 },
-  { name: 'Gold', color: '#ffc23d', base: 26.8, lane: 0 },
+  { name: 'You', color: '#ff5a3d', slot: 2 },
+  { name: 'Blue', color: '#3d8aff', slot: 0, skill: 1.0, nerve: 0.9 },
+  { name: 'Lime', color: '#7ad13a', slot: 1, skill: 0.985, nerve: 0.6 },
+  { name: 'Gold', color: '#ffc23d', slot: 3, skill: 0.97, nerve: 0.35 },
 ];
+const DIFFS = [{ name: 'EASY', pace: 0.88, drift: 0.35, top: -2.5 }, { name: 'NORMAL', pace: 0.97, drift: 0.8, top: 0 }, { name: 'HARD', pace: 1.02, drift: 1, top: 1.2 }];
+const TOP = 27, BOOST_TOP = 9, TURN = 2.1, DRIFT_TURN = 1.35;
+
+// ── the racing line: relax the centre line toward its neighbours' midpoint (a minimum-curvature line
+// that cuts to the inside of corners), then work out how fast each point can be taken and brake for it ──
+const LINE = (() => {
+  const P = TRACK.pts, lim = HW - 1.2, off = new Float64Array(N);
+  for (let it = 0; it < 500; it++) for (let i = 0; i < N; i++) {
+    const a = P[(i - 1 + N) % N], b = P[(i + 1) % N], oa = off[(i - 1 + N) % N], ob = off[(i + 1) % N];
+    const mx = (a.x + a.nx * oa + b.x + b.nx * ob) / 2, mz = (a.z + a.nz * oa + b.z + b.nz * ob) / 2;
+    off[i] = clamp(lerp(off[i], (mx - P[i].x) * P[i].nx + (mz - P[i].z) * P[i].nz, 0.5), -lim, lim);
+  }
+  const pts = P.map((p, i) => ({ x: p.x + p.nx * off[i], z: p.z + p.nz * off[i], off: off[i] }));
+  const curve = pts.map((p, i) => {
+    const a = pts[(i - 3 + N) % N], c = pts[(i + 3) % N];
+    const ab = Math.hypot(p.x - a.x, p.z - a.z), bc = Math.hypot(c.x - p.x, c.z - p.z), ca = Math.hypot(a.x - c.x, a.z - c.z);
+    const area2 = Math.abs((p.x - a.x) * (c.z - a.z) - (p.z - a.z) * (c.x - a.x));
+    return (2 * area2) / Math.max(1e-6, ab * bc * ca);
+  });
+  // the fastest a kart can turn is TURN rad/s (more when drifting), so tight curves cap the speed
+  const vmax = curve.map((k) => Math.min(TOP + 6, (TURN * DRIFT_TURN * 1.08) / Math.max(k, 1e-4)));
+  const ds = TRACK.total / N, BRAKE = 22;
+  for (let pass = 0; pass < 2; pass++) for (let i = N - 1; i >= 0; i--) vmax[i] = Math.min(vmax[i], Math.sqrt(vmax[(i + 1) % N] ** 2 + 2 * BRAKE * ds));
+  return { pts, curve, vmax, ds };
+})();
+window.RACELINE = LINE; // handy for testing
+
 function makeKart(color) {
   const n = new Node();
   n.add(mesh(kartBody, { color }));
@@ -139,17 +166,23 @@ class Race extends Scene3D {
     for (const sgn of [1, -1]) gantry.add(mesh(Geometry.quad(HW * 2, 1), { map: banner, unlit: true }, { position: [0, 4.6, sgn * 0.17], rotation: [0, sgn > 0 ? 0 : Math.PI, 0] }));
     this.karts = KARTS.map((k) => Object.assign({}, k, { node: this.add(makeKart(k.color)) }));
     this.best = store.get('driftkart:best', null);
+    this.diff = clamp(store.get('driftkart:diff', 1), 0, 2);
     this.place();
     this.state = 'title';
   }
   place() {
-    // grid: everyone just behind the line
-    this.karts.forEach((k, i) => {
-      const s = TRACK.total - 4 - Math.floor(i / 2) * 4.5, p = pointAt(s), lane = i % 2 ? -1.6 : 1.6;
-      Object.assign(k, { s, x: p.x + p.nx * lane, z: p.z + p.nz * lane, h: Math.atan2(p.tx, p.tz), vx: 0, vz: 0, lap: 0, done: false, finishT: 0 });
+    // a staggered grid just behind the line; you start third
+    this.finishOrder = [];
+    const pace = DIFFS[this.diff].pace;
+    this.karts.forEach((k) => {
+      const s = TRACK.total - 4 - Math.floor(k.slot / 2) * 5, p = pointAt(s), lane = k.slot % 2 ? -1.7 : 1.7;
+      Object.assign(k, {
+        x: p.x + p.nx * lane, z: p.z + p.nz * lane, h: Math.atan2(p.tx, p.tz), vx: 0, vz: 0, fwd: 0,
+        idx: (p.i + N) % N, lap: 0, cps: new Set(), lapStart: 0, bestLap: Infinity, done: false, finishT: 0,
+        drift: 0, boost: 0, offroad: false, passOff: 0, steerS: 0, drifting: false,
+        pace: k.skill ? pace * k.skill * rand(0.985, 1.01) : 1,
+      });
     });
-    const me = this.karts[0];
-    Object.assign(me, { idx: N - 3, cps: new Set(), lapStart: 0, bestLap: Infinity, drift: 0, boost: 0, offroad: false });
     this.sync();
   }
   begin() {
@@ -179,8 +212,17 @@ class Race extends Scene3D {
     if (this.state === 'title' || this.state === 'results') {
       const a = this.time * 0.15;
       this.camera.position.set(Math.sin(a) * 95, 46, Math.cos(a) * 95); this.camera.lookAt(0, 0, 0);
-      if (this.state === 'results') this.driveAI(dt);
-      if (this.time > 0.5 && input.pressed('go') && (this.state === 'title' || this.time - this.doneAt > 1.5)) this.begin();
+      if (this.state === 'results') { this.raceT += dt; this.driveAI(dt); this.collide(); }
+      if (this.state === 'title') {
+        if (input.pressed('left')) { this.diff = (this.diff + 2) % 3; this.audio.sfx('blip'); }
+        if (input.pressed('right')) { this.diff = (this.diff + 1) % 3; this.audio.sfx('blip'); }
+        const p = input.pointer;
+        if (p.pressed && Math.abs(p.y - this.height * 0.66) < 22) {
+          const i = Math.floor((p.x - (this.width / 2 - 150)) / 100);
+          if (i >= 0 && i < 3) { this.diff = i; this.audio.sfx('blip'); this.sync(); return; }
+        }
+      }
+      if (this.time > 0.5 && input.pressed('go') && (this.state === 'title' || this.time - this.doneAt > 1.5)) { store.set('driftkart:diff', this.diff); this.begin(); }
       this.sync();
       return;
     }
@@ -195,7 +237,7 @@ class Race extends Scene3D {
     this.raceT += dt;
     this.drivePlayer(dt);
     this.driveAI(dt);
-    this.bump();
+    this.collide();
     this.sync();
     this.chase(dt);
     if (this.engine) {
@@ -203,91 +245,132 @@ class Race extends Scene3D {
       this.engine.o.frequency.setTargetAtTime(55 + sp * 6 + (me.boost > 0 ? 40 : 0), this.audio.ctx.currentTime, 0.05);
     }
   }
-  drivePlayer(dt) {
-    const me = this.karts[0], input = this.input;
-    const fx = Math.sin(me.h), fz = Math.cos(me.h), lx = Math.cos(me.h), lz = -Math.sin(me.h);
-    let fwd = me.vx * fx + me.vz * fz, lat = me.vx * lx + me.vz * lz;
-    const gas = input.down('gas') || input.stick.y < -0.4, brake = input.down('brake');
-    const steer = input.axis('left', 'right') + input.stick.x;
-    // where am I on the track?
-    let best = me.idx, bd = 1e9;
-    for (let k = -12; k <= 12; k++) { const i = (me.idx + k + N) % N, p = TRACK.pts[i], d = Math.hypot(p.x - me.x, p.z - me.z); if (d < bd) { bd = d; best = i; } }
-    const prev = me.idx; me.idx = best;
-    me.offroad = bd > HW + 0.4;
-    for (const q of [1, 2, 3]) if (Math.abs(best - (q * N) / 4) < 6) me.cps.add(q);
-    if (prev > N * 0.8 && best < N * 0.2 && !me.done) {
-      if (me.cps.size >= 3) {
-        me.lap++;
-        const lapT = this.raceT - me.lapStart; me.lapStart = this.raceT; me.bestLap = Math.min(me.bestLap, lapT);
-        if (me.lap >= LAPS) this.finish();
-        else { this.msg = { text: me.lap === LAPS - 1 ? 'FINAL LAP' : `LAP ${me.lap + 1}`, t: 1.5 }; this.audio.sfx('powerup'); }
+  // where a kart is on the track, and lap counting (the same for everyone)
+  trackKart(k) {
+    let best = k.idx, bd = 1e9;
+    for (let o = -12; o <= 12; o++) { const i = (k.idx + o + N) % N, p = TRACK.pts[i], d = Math.hypot(p.x - k.x, p.z - k.z); if (d < bd) { bd = d; best = i; } }
+    const prev = k.idx; k.idx = best;
+    k.offroad = bd > HW + 0.4;
+    for (const q of [1, 2, 3]) if (Math.abs(best - (q * N) / 4) < 6) k.cps.add(q);
+    if (prev > N * 0.8 && best < N * 0.2 && !k.done) {
+      if (k.cps.size >= 3) {
+        k.lap++;
+        const lapT = this.raceT - k.lapStart; k.lapStart = this.raceT; k.bestLap = Math.min(k.bestLap, lapT);
+        if (k.lap >= LAPS) { k.done = true; k.finishT = this.raceT; this.finishOrder.push(k); if (k === this.karts[0]) this.finish(); }
+        else if (k === this.karts[0]) { this.msg = { text: k.lap === LAPS - 1 ? 'FINAL LAP' : `LAP ${k.lap + 1}`, t: 1.5 }; this.audio.sfx('powerup'); }
       }
-      me.cps = new Set();
+      k.cps = new Set();
     }
     if (bd > HW + 16) { // way off course: back onto the road
       const p = TRACK.pts[best];
-      Object.assign(me, { x: p.x, z: p.z, h: Math.atan2(p.tx, p.tz), vx: 0, vz: 0 });
-      this.msg = { text: 'back on track', t: 1 };
-      return;
+      Object.assign(k, { x: p.x, z: p.z, h: Math.atan2(p.tx, p.tz), vx: 0, vz: 0 });
+      if (k === this.karts[0]) this.msg = { text: 'back on track', t: 1 };
+      return false;
     }
-    const top = (me.offroad ? 12 : 27) + (me.boost > 0 ? 9 : 0);
-    if (gas && !me.done) fwd = Math.min(top, fwd + (me.boost > 0 ? 34 : 17) * dt);
-    if (brake) fwd = Math.max(-7, fwd - 26 * dt);
+    return true;
+  }
+  // kart physics shared by you and the rivals; c = { gas, brake, steer (-1 left … 1 right), drift }
+  physics(k, dt, c) {
+    const fx = Math.sin(k.h), fz = Math.cos(k.h), lx = Math.cos(k.h), lz = -Math.sin(k.h);
+    let fwd = k.vx * fx + k.vz * fz, lat = k.vx * lx + k.vz * lz;
+    const top = (k.offroad ? 12 : TOP + (k.extraTop || 0)) + (k.boost > 0 ? BOOST_TOP : 0);
+    if (c.gas) fwd = Math.min(top, fwd + (k.boost > 0 ? 34 : 17) * dt);
+    if (c.brake) fwd = Math.max(-7, fwd - 26 * dt);
     if (fwd > top) fwd = damp(fwd, top, 2.5, dt);
-    fwd *= Math.exp(-(me.offroad ? 1.4 : 0.25) * dt);
-    const drifting = input.down('drift') && Math.abs(steer) > 0.2 && fwd > 10 && !me.offroad;
-    const turn = steer * 2.1 * clamp(Math.abs(fwd) / 8, 0, 1) * Math.sign(fwd || 1) * (drifting ? 1.35 : 1);
-    me.h -= turn * dt;
+    fwd *= Math.exp(-(k.offroad ? 1.4 : 0.25) * dt);
+    const drifting = c.drift && Math.abs(c.steer) > 0.2 && fwd > 10 && !k.offroad;
+    k.drifting = drifting;
+    k.h -= c.steer * TURN * clamp(Math.abs(fwd) / 8, 0, 1) * Math.sign(fwd || 1) * (drifting ? DRIFT_TURN : 1) * dt;
     lat *= Math.exp(-(drifting ? 1.8 : 9) * dt);
     if (drifting) {
-      me.drift += dt;
-      const lvl = me.drift > 1.5 ? 2 : me.drift > 0.7 ? 1 : 0;
-      if (Math.random() < 0.7) this.particles.emit({ x: me.x - fx * 0.9 + lx * steer * 0.6, y: 0.15, z: me.z - fz * 0.9 + lz * steer * 0.6 }, { count: 2, speed: [0.5, 2], life: [0.15, 0.35], color: [['#dddddd', '#29a8ff', '#ff9a1f'][lvl], '#ffffff'], size: [0.06, 0.12] });
-    } else if (me.drift > 0) {
-      if (me.drift > 0.7) { me.boost = me.drift > 1.5 ? 1.3 : 0.7; this.msg = { text: me.drift > 1.5 ? 'SUPER BOOST!' : 'BOOST!', t: 0.8 }; this.audio.noise({ dur: 0.4, vol: 0.15, freq: 800, to: 3000, filter: 'bandpass' }); }
-      me.drift = 0;
+      k.drift += dt;
+      const lvl = k.drift > 1.5 ? 2 : k.drift > 0.7 ? 1 : 0;
+      if (Math.random() < 0.6) this.particles.emit({ x: k.x - fx * 0.9 + lx * c.steer * 0.6, y: 0.15, z: k.z - fz * 0.9 + lz * c.steer * 0.6 }, { count: 2, speed: [0.5, 2], life: [0.15, 0.35], color: [['#dddddd', '#29a8ff', '#ff9a1f'][lvl], '#ffffff'], size: [0.06, 0.12] });
+    } else if (k.drift > 0) {
+      if (k.drift > 0.7) {
+        k.boost = k.drift > 1.5 ? 1.3 : 0.7;
+        if (k === this.karts[0]) { this.msg = { text: k.drift > 1.5 ? 'SUPER BOOST!' : 'BOOST!', t: 0.8 }; this.audio.noise({ dur: 0.4, vol: 0.15, freq: 800, to: 3000, filter: 'bandpass' }); }
+      }
+      k.drift = 0;
     }
-    me.boost = Math.max(0, me.boost - dt);
-    const nfx = Math.sin(me.h), nfz = Math.cos(me.h), nlx = Math.cos(me.h), nlz = -Math.sin(me.h);
-    me.vx = nfx * fwd + nlx * lat; me.vz = nfz * fwd + nlz * lat;
-    me.x += me.vx * dt; me.z += me.vz * dt;
-    me.node.wheels.forEach((w) => (w.rotation.x += fwd * dt * 3));
-    me.node.rotation.z = clamp(-lat * 0.02, -0.12, 0.12);
-    if (me.offroad && Math.abs(fwd) > 5 && Math.random() < 0.4) this.particles.emit({ x: me.x, y: 0.1, z: me.z }, { count: 1, speed: [0.3, 1], life: [0.3, 0.5], color: '#8a6a40', size: [0.08, 0.14] });
+    k.boost = Math.max(0, k.boost - dt);
+    const nfx = Math.sin(k.h), nfz = Math.cos(k.h), nlx = Math.cos(k.h), nlz = -Math.sin(k.h);
+    k.vx = nfx * fwd + nlx * lat; k.vz = nfz * fwd + nlz * lat; k.fwd = fwd;
+    k.x += k.vx * dt; k.z += k.vz * dt;
+    k.node.wheels.forEach((w) => (w.rotation.x += fwd * dt * 3));
+    k.node.rotation.z = clamp(-lat * 0.02, -0.12, 0.12);
+    if (k.boost > 0 && Math.random() < 0.5) this.particles.emit({ x: k.x - nfx * 1.1, y: 0.4, z: k.z - nfz * 1.1 }, { count: 1, speed: [0.5, 1.5], life: [0.15, 0.3], color: ['#ffd23f', '#ff7a2c'], size: [0.08, 0.14] });
+    if (k.offroad && Math.abs(fwd) > 5 && Math.random() < 0.4) this.particles.emit({ x: k.x, y: 0.1, z: k.z }, { count: 1, speed: [0.3, 1], life: [0.3, 0.5], color: '#8a6a40', size: [0.08, 0.14] });
   }
+  drivePlayer(dt) {
+    const me = this.karts[0], input = this.input;
+    if (!this.trackKart(me)) return;
+    this.physics(me, dt, {
+      gas: (input.down('gas') || input.stick.y < -0.4) && !me.done, brake: input.down('brake'),
+      steer: clamp(input.axis('left', 'right') + input.stick.x, -1, 1), drift: input.down('drift'),
+    });
+  }
+  // the rivals: follow the racing line, brake for corners, drift for boosts, go around slower karts
   driveAI(dt) {
-    const me = this.karts[0], myP = this.progress(me);
-    for (const k of this.karts.slice(1)) {
-      if (this.state === 'count') continue;
-      const p = pointAt(k.s), ahead = this.progress(k) - myP;
-      let sp = k.base * (1 - p.curve * 3.2);
-      if (this.state === 'race') sp *= ahead > 30 ? 0.9 : ahead < -30 ? 1.1 : 1;
-      k.v = damp(k.v || 0, sp, 1.5, dt);
-      k.s += k.v * dt;
-      const q = pointAt(k.s), lane = k.lane + Math.sin(this.time * 0.4 + k.base) * 1.2;
-      k.x = q.x + q.nx * lane; k.z = q.z + q.nz * lane; k.h = Math.atan2(q.tx, q.tz);
-      k.node.wheels.forEach((w) => (w.rotation.x += k.v * dt * 3));
+    const me = this.karts[0], diff = DIFFS[this.diff], myP = this.progress(me);
+    for (const k of this.karts) {
+      if (k === me || this.state === 'count' || this.state === 'title') continue;
+      if (!this.trackKart(k)) continue;
+      const speed = Math.max(0, k.fwd), look = Math.round((4 + speed * 0.32) / LINE.ds);
+      const j = (k.idx + look) % N, tp = LINE.pts[j], tn = TRACK.pts[j];
+      // overtaking: if someone is just ahead on our line, pull out to the side with more room
+      let want = 0;
+      for (const o of this.karts) {
+        if (o === k) continue;
+        const gap = this.progress(o) - this.progress(k);
+        if (gap > 0 && gap < 10 && Math.abs((o.x - tp.x) * tn.nx + (o.z - tp.z) * tn.nz) < 2.2) {
+          const oOff = (o.x - tn.x) * tn.nx + (o.z - tn.z) * tn.nz;
+          want = (oOff > 0 ? -1 : 1) * 2.4 * (0.6 + k.nerve * 0.6);
+        }
+      }
+      k.passOff = damp(k.passOff, want, want ? 3 : 1.2, dt);
+      const off = clamp(tp.off + k.passOff, -(HW - 0.9), HW - 0.9);
+      const tx = tn.x + tn.nx * off, tz = tn.z + tn.nz * off;
+      const fx = Math.sin(k.h), fz = Math.cos(k.h), dx = tx - k.x, dz = tz - k.z;
+      const ang = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
+      k.steerS = damp(k.steerS, clamp(ang * 3.2, -1, 1), 12, dt);
+      // target speed: the slowest point coming up within braking reach, scaled by skill
+      let vt = Infinity;
+      for (let a = 1; a <= Math.max(3, Math.round((speed * 0.55) / LINE.ds)); a++) vt = Math.min(vt, LINE.vmax[(k.idx + a) % N]);
+      // a little catch-up when far behind you, a little easing off when far ahead
+      let pace = k.pace, extra = diff.top;
+      if (this.state === 'race' && !k.done) { const gap = this.progress(k) - myP; if (gap < -40) { pace *= 1.05; extra += 1.5; } else if (gap > 70) { pace *= 0.97; extra -= 1; } }
+      k.extraTop = extra;
+      vt = Math.min(vt * pace, TOP + extra + (k.boost > 0 ? BOOST_TOP : 0));
+      // drift through the tight stuff (better drivers do it more), let go on the way out for a boost
+      const curveAhead = LINE.curve[j];
+      if (!k.drifting) k.wantDrift = speed > 12 && curveAhead > 0.035 && Math.random() < diff.drift * dt * 8;
+      else k.wantDrift = curveAhead > 0.02 || Math.abs(k.steerS) > 0.45;
+      this.physics(k, dt, { gas: speed < vt - 0.3 || k.done, brake: speed > vt + 3.5, steer: k.steerS, drift: k.wantDrift || (k.drifting && Math.abs(k.steerS) > 0.3) });
     }
   }
-  bump() {
+  // every kart bumps every other kart
+  collide() {
     const me = this.karts[0];
-    for (const k of this.karts.slice(1)) {
-      const dx = me.x - k.x, dz = me.z - k.z, d = Math.hypot(dx, dz);
+    for (let a = 0; a < this.karts.length; a++) for (let b = a + 1; b < this.karts.length; b++) {
+      const A = this.karts[a], B = this.karts[b], dx = A.x - B.x, dz = A.z - B.z, d = Math.hypot(dx, dz);
       if (d > 1.7 || d === 0) continue;
-      me.x += (dx / d) * (1.7 - d); me.z += (dz / d) * (1.7 - d);
-      me.vx *= 0.85; me.vz *= 0.85;
-      if (!this.bumpT || this.time - this.bumpT > 0.3) { this.bumpT = this.time; this.audio.noise({ dur: 0.08, vol: 0.15, freq: 700 }); this.camera.shake(0.08, 0.15); }
+      const nx = dx / d, nz = dz / d, push = (1.7 - d) / 2;
+      A.x += nx * push; A.z += nz * push; B.x -= nx * push; B.z -= nz * push;
+      const vn = (A.vx - B.vx) * nx + (A.vz - B.vz) * nz;
+      if (vn < 0) { const j = -vn * 0.65; A.vx += nx * j; A.vz += nz * j; B.vx -= nx * j; B.vz -= nz * j; }
+      if ((A === me || B === me) && (!this.bumpT || this.time - this.bumpT > 0.3)) { this.bumpT = this.time; this.audio.noise({ dur: 0.08, vol: 0.15, freq: 700 }); this.camera.shake(0.08, 0.15); }
     }
   }
-  rank() {
-    const prog = this.karts.map((k) => (k === this.karts[0] && k.done ? Infinity - k.finishPlace : this.progress(k)));
-    const mine = prog[0];
-    return 1 + prog.slice(1).filter((p) => p > mine).length;
+  progress(k) { return k.lap * TRACK.total + TRACK.pts[k.idx].d + (k.idx > N * 0.9 && !k.cps.size ? -TRACK.total : 0); }
+  standings() {
+    const running = this.karts.filter((k) => !k.done).sort((a, b) => this.progress(b) - this.progress(a));
+    return [...this.finishOrder, ...running];
   }
+  rank() { return this.standings().indexOf(this.karts[0]) + 1; }
   finish() {
     const me = this.karts[0];
-    me.done = true;
-    const place = this.rank();
+    const place = this.finishOrder.indexOf(me) + 1;
     me.finishPlace = place;
     this.results = { place, time: this.raceT, bestLap: me.bestLap };
     const b = this.best || {};
@@ -319,24 +402,38 @@ class Race extends Scene3D {
       t('DRIFT KART', W / 2, H * 0.12, { size: big * 0.11, align: 'center', color: '#ffe066' });
       t(`${LAPS} laps · three rivals · hold drift through corners for a boost`, W / 2, H * 0.12 + big * 0.13, { size: Math.max(13, big * 0.032), align: 'center', weight: '600' });
       t('↑/W gas · ←/→ steer · ↓ brake · Space drift (on touch: A gas, B drift)', W / 2, H * 0.12 + big * 0.18, { size: Math.max(11, big * 0.024), align: 'center', weight: '500' });
+      DIFFS.forEach((d, i) => {
+        const x = W / 2 - 150 + i * 100, y = H * 0.66 - 16, on = i === this.diff;
+        ctx.fillStyle = on ? '#ffe066' : 'rgba(0,0,0,.35)'; ctx.fillRect(x + 6, y, 88, 32);
+        t(d.name, x + 50, y + 8, { size: 15, align: 'center', color: on ? '#1a1a2a' : '#ffffff', shadow: null });
+      });
+      t('←/→ rivals: easy · normal · hard', W / 2, H * 0.66 + 22, { size: 12, align: 'center', weight: '500' });
       if (Math.floor(this.time * 2) % 2 === 0) t('press Enter or tap to race', W / 2, H * 0.8, { size: Math.max(15, big * 0.038), align: 'center' });
       if (this.best && this.best.time) t(`best race ${fmt(this.best.time)} · best lap ${fmt(this.best.lap)}`, W / 2, H * 0.8 + big * 0.06, { size: Math.max(12, big * 0.028), align: 'center', weight: '600' });
       return;
     }
     const place = me.done ? me.finishPlace : this.rank();
+    if (this.state !== 'results') {
     t(ord(place), 16, 12, { size: Math.max(30, big * 0.08), color: place === 1 ? '#ffe066' : '#ffffff' });
     t(`LAP ${Math.min(me.lap + 1, LAPS)}/${LAPS}`, 16, 18 + Math.max(30, big * 0.08), { size: 16 });
     t(fmt(this.raceT || 0), 16, 40 + Math.max(30, big * 0.08), { size: 14, weight: '600' });
     t(`${Math.round(Math.hypot(me.vx, me.vz) * 3.6)} km/h`, W / 2, H - 40, { size: 18, align: 'center' });
     if (me.drift > 0.7) t(me.drift > 1.5 ? 'release for SUPER BOOST' : 'keep drifting…', W / 2, H - 64, { size: 13, align: 'center', color: me.drift > 1.5 ? '#ff9a1f' : '#29a8ff' });
+    }
     if (this.state === 'count') t(this.countT > 0 ? String(Math.ceil(this.countT)) : 'GO!', W / 2, H * 0.3, { size: big * 0.16, align: 'center', color: '#ffe066' });
     if (this.msg) { this.msg.t -= 1 / 60; t(this.msg.text, W / 2, H * 0.22, { size: Math.max(18, big * 0.05), align: 'center', color: '#ffe066', alpha: clamp(this.msg.t * 2, 0, 1) }); if (this.msg.t <= 0) this.msg = null; }
     if (this.state === 'results') {
       const r = this.results;
-      ctx.fillStyle = 'rgba(10,20,40,.7)'; ctx.fillRect(0, H * 0.32, W, H * 0.36);
-      t(r.place === 1 ? 'YOU WIN!' : `${ord(r.place)} PLACE`, W / 2, H * 0.35, { size: big * 0.09, align: 'center', color: r.place === 1 ? '#ffe066' : '#ffffff' });
-      t(`race ${fmt(r.time)} · best lap ${fmt(r.bestLap)}${this.newBest ? ' · new record!' : ''}`, W / 2, H * 0.35 + big * 0.11, { size: Math.max(14, big * 0.034), align: 'center', weight: '600' });
-      if (this.time - this.doneAt > 1.5) t('Enter or tap to race again', W / 2, H * 0.35 + big * 0.18, { size: Math.max(13, big * 0.03), align: 'center', weight: '600' });
+      ctx.fillStyle = 'rgba(10,20,40,.72)'; ctx.fillRect(0, H * 0.2, W, H * 0.62);
+      t(r.place === 1 ? 'YOU WIN!' : `${ord(r.place)} PLACE`, W / 2, H * 0.23, { size: big * 0.08, align: 'center', color: r.place === 1 ? '#ffe066' : '#ffffff' });
+      t(`best lap ${fmt(r.bestLap)}${this.newBest ? ' · new record!' : ''} · ${DIFFS[this.diff].name.toLowerCase()}`, W / 2, H * 0.23 + big * 0.1, { size: Math.max(13, big * 0.03), align: 'center', weight: '600' });
+      this.standings().forEach((k, i) => {
+        const y = H * 0.23 + big * 0.17 + i * 26, x0 = W / 2 - 130;
+        ctx.fillStyle = k.color; ctx.fillRect(x0, y + 3, 12, 12);
+        t(`${ord(i + 1)}  ${k.name}`, x0 + 20, y, { size: 16, color: k === me ? '#ffe066' : '#ffffff' });
+        t(k.done ? fmt(k.finishT) : `lap ${Math.min(k.lap + 1, LAPS)}…`, x0 + 260, y, { size: 16, align: 'right', weight: '600' });
+      });
+      if (this.time - this.doneAt > 1.5) t('Enter or tap to race again', W / 2, H * 0.77, { size: Math.max(13, big * 0.03), align: 'center', weight: '600' });
     }
   }
 }

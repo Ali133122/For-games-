@@ -48,6 +48,17 @@
     padding: calc(6px + env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) 6px max(12px, env(safe-area-inset-left, 0px)); }
   #player header b { font: 700 14px var(--mono); letter-spacing: .1em; }
   #player iframe { border: 0; width: 100%; height: 100%; background: #000; }
+  #player header .hint { color: var(--muted); font: 12px var(--mono); margin-left: auto; }
+  #gameMenu { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(5, 4, 10, .72); backdrop-filter: blur(4px);
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  #gameMenu .box { width: min(340px, 100%); display: grid; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--accent);
+    border-radius: 12px; padding: 22px; box-shadow: 0 20px 60px rgba(0, 0, 0, .6); }
+  #gameMenu h2 { margin: 0 0 2px; font: 700 13px var(--mono); letter-spacing: .14em; color: var(--muted); }
+  #gameMenu .name { margin: 0 0 10px; font: 700 22px var(--mono); letter-spacing: .06em; color: var(--accent); }
+  #gameMenu button { font-size: 16px; padding: 12px 14px; text-align: left; display: flex; justify-content: space-between; align-items: center; }
+  #gameMenu button kbd { font: 12px var(--mono); color: var(--muted); }
+  #gameMenu button:focus-visible, #gameMenu button:hover { border-color: var(--accent); outline: none; background: rgba(255, 255, 255, .06); }
+  #gameMenu .foot { margin: 6px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -88,8 +99,19 @@
 </div>
 
 <div id="player" hidden>
-  <header><b id="playTitle"></b><button id="backBtn" type="button">← Back to arcade</button></header>
+  <header><b id="playTitle"></b><span class="hint">Esc: menu</span><button id="menuBtn" type="button">☰ Menu</button></header>
   <iframe id="frame" title="Game" allow="autoplay; fullscreen; gamepad"></iframe>
+</div>
+
+<div id="gameMenu" hidden role="dialog" aria-modal="true" aria-labelledby="menuTitle">
+  <div class="box">
+    <h2 id="menuTitle">PAUSED</h2>
+    <p class="name" id="menuGame"></p>
+    <button type="button" id="mResume">▶ Resume <kbd>Esc</kbd></button>
+    <button type="button" id="mRestart">↻ Restart game <kbd>R</kbd></button>
+    <button type="button" id="mQuit">← Back to the arcade <kbd>Q</kbd></button>
+    <p class="foot">↑ ↓ to choose · Enter to pick</p>
+  </div>
 </div>
 
 <script src="flint/flint.js"></script>
@@ -545,8 +567,11 @@ class Arcade extends Scene3D {
 let arcade = null;
 const player = $('player'), frame = $('frame');
 
+let playing = null;
 function openGame(gm) {
   closePanels();
+  playing = gm;
+  menu.hidden = true;
   $('playTitle').textContent = gm.title.toUpperCase();
   $('playTitle').style.color = gm.color;
   player.style.setProperty('--accent', gm.color);
@@ -557,12 +582,50 @@ function openGame(gm) {
 }
 function closeGame() {
   if (player.hidden) return;
+  menu.hidden = true; playing = null;
   player.hidden = true;
   frame.src = 'about:blank';
   game.start();
   if (arcade && arcade.state === 'zoom') arcade.returnFromGame();
 }
-$('backBtn').addEventListener('click', closeGame);
+
+// ── the in-game menu: Esc while playing (games send it through arcade-bridge.js) ──
+const menu = $('gameMenu'), menuItems = () => [...menu.querySelectorAll('button')];
+function focusGame() { try { frame.focus(); frame.contentWindow.focus(); } catch (e) { /* other site */ } }
+// tell the game (through its arcade-bridge.js) to freeze or carry on
+function tellGame(type) { try { frame.contentWindow.postMessage({ type }, '*'); } catch (e) { /* no game */ } }
+function openMenu() {
+  if (player.hidden || !playing) return;
+  $('menuGame').textContent = playing.title;
+  menu.style.setProperty('--accent', playing.color);
+  tellGame('flint-arcade:pause');
+  menu.hidden = false;
+  $('mResume').focus();
+}
+function closeMenu() { if (menu.hidden) return; menu.hidden = true; tellGame('flint-arcade:resume'); focusGame(); }
+function toggleMenu() { menu.hidden ? openMenu() : closeMenu(); }
+function restartGame() {
+  if (!playing) return;
+  menu.hidden = true;
+  frame.src = 'about:blank';
+  setTimeout(() => { frame.src = playing.path; frame.addEventListener('load', focusGame, { once: true }); }, 30);
+}
+$('menuBtn').addEventListener('click', openMenu);
+$('mResume').addEventListener('click', closeMenu);
+$('mRestart').addEventListener('click', restartGame);
+$('mQuit').addEventListener('click', closeGame);
+menu.addEventListener('keydown', (e) => {
+  const items = menuItems(), i = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+  else if (e.key === 'r' || e.key === 'R') restartGame();
+  else if (e.key === 'q' || e.key === 'Q') closeGame();
+});
+menu.addEventListener('click', (e) => { if (e.target === menu) closeMenu(); });
+// a game asked for the menu (it saw Esc)
+addEventListener('message', (e) => {
+  if (e.source !== frame.contentWindow || !e.data || e.data.type !== 'flint-arcade:menu') return;
+  toggleMenu();
+});
 
 const panels = [$('listPanel'), $('addPanel')];
 function closePanels() { panels.forEach((p) => (p.hidden = true)); if (arcade && arcade.state === 'menu') arcade.state = 'walk'; }
@@ -574,7 +637,7 @@ function openPanel(p) {
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closePanels));
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (!player.hidden) closeGame(); else if (panels.some((p) => !p.hidden)) closePanels();
+  if (!player.hidden) { e.preventDefault(); toggleMenu(); } else if (panels.some((p) => !p.hidden)) closePanels();
 });
 
 function renderList() {

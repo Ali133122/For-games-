@@ -7,9 +7,11 @@ Open [`index.html`](index.html) in a browser to walk around a 3D neon arcade. Ev
 - **Walk:** WASD or ↑/↓. **Look:** drag with the mouse, or ←/→ to turn. **Play:** E, Enter or Space
 - **Touch:** your left thumb walks, your right thumb looks, and tapping a cabinet plays it
 - **All games** lists every game with a Play button, if you'd rather skip the walk
+- **Esc while playing** opens a menu: **Resume**, **Restart game** or **Back to the arcade**. The ☰ Menu button at the top does the same, and so does a gamepad's Select/Back button. The game is frozen, sound included, until you pick one
 
 **Adding your games:**
 1. Put the game in its own folder with an `index.html` inside, e.g. `my-game/index.html`.
+   Add `<script src="../arcade-bridge.js"></script>` near the top of its `<head>`. This lets Esc open the arcade menu and freezes the game while the menu is open. The game works on its own page without it, too.
 2. Add an entry to [`games.js`](games.js) with a title, path, neon color, tagline and controls.
 
 Add `room: 2` or `room: 3` to choose a room. The arcade has three rooms in a row, each with its own look: the **main floor**, the **back room** and the **sky deck**. Each room's east doorway leads to the next room and its west doorway leads back. Each room grows to fit however many cabinets it has. You can also press **+ Add game** inside the arcade to add a cabinet without editing files. Those are saved in your browser only.

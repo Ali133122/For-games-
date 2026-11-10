@@ -936,7 +936,8 @@
 
     // ---- DOM ----
     _attach(canvas) {
-      const isTyping = (e) => { const t = e.target; return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable); };
+      // keys pressed while a button, link or form field has focus belong to that page control, not the game
+      const isTyping = (e) => { const t = e.target; return t && (/^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(t.tagName) || t.isContentEditable); };
       const bound = (code) => { for (const k in this.bindings) if (this.bindings[k].includes(code)) return true; return false; };
       addEventListener('keydown', (e) => {
         if (isTyping(e)) return;

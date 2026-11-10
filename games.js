@@ -2,6 +2,7 @@
 //
 // To add a game:
 //   1. Put it in its own folder next to index.html, with an index.html inside (e.g. my-game/index.html).
+//      Put <script src="../arcade-bridge.js"></script> in its <head> so Esc opens the arcade's menu.
 //   2. Add an entry below. The arcade makes room for any number of cabinets.
 //
 //   title    shown on the cabinet's marquee

@@ -236,3 +236,19 @@ Your lantern is slowly going out. Collect embers to keep its light burning. Wrai
 | The Devourer | A serpent that chases you, spits fireballs and eats embers to heal | Only its head can be hurt. Its body hurts too, so don't get boxed in |
 
 Only flares damage a boss. While a boss is out, extra embers spawn to fuel your flares, and regular enemies arrive less often. Defeating one gives bonus points, fully restores your light and drops two power-ups.
+
+### Afterglow
+Open [`afterglow/index.html`](afterglow/index.html) in a browser. It's a single-file WebGL2 glow tool with no dependencies, inspired by the Deep Glow plugin for After Effects.
+
+Load an image or video (button, drag and drop, or paste), or use the built-in demo scene, then tune the glow and save a full-resolution PNG.
+
+- **HDR pipeline:** 16-bit float buffers with an 11-octave bloom pyramid, so long glow tails stay smooth instead of banding
+- **Physically based falloff:** each octave is weighted by a falloff curve. Lower falloff gives longer, hazier tails, and the radius control fades octaves in smoothly
+- **Soft-knee threshold:** controls which parts of the image glow, without hard edges
+- **Hot core:** very bright light spills into every channel and turns white-hot, like a real light source
+- **Lens effects:** chromatic aberration, anamorphic stretch, horizontal streaks and flicker
+- **Tint and saturation** for the glow
+- **Filmic tone mapping and dithering** so bright areas roll off naturally and dark gradients don't band
+- **Before/after split view**, glow-only view, and presets: Neon, Soft bloom, Haze, Anamorphic, Hot core and Dreamy
+
+Double-click any slider to reset it.

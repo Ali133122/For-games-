@@ -284,6 +284,14 @@
     <button class="btn" id="overNew">Change settings</button>
   </div>
 </div>
+<div class="modal" id="resignBox">
+  <div class="dialog result" role="dialog" aria-labelledby="resignTitle">
+    <div class="result-icon">⚑</div>
+    <h2 id="resignTitle">Resign this game?</h2>
+    <p id="resignText">The game ends and counts as a loss.</p>
+    <div class="row2"><button class="btn" id="resignNo">Keep playing</button><button class="btn primary" id="resignYes">Resign</button></div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -2069,10 +2077,19 @@ function ChessCore() {
     save(); render(false); requestEval(); maybeAI();
   }
 
+  // asks in the page (browser confirm() pop-ups are blocked in some embedded viewers)
   function resign() {
     if (over || !hist.length) return;
     const loser = S.mode === 'ai' ? S.human : pos.turn;
-    if (!confirm(S.mode === 'ai' ? 'Resign this game?' : `Resign for ${sideName(loser)}?`)) return;
+    $('resignTitle').textContent = S.mode === 'ai' ? 'Resign this game?' : `Resign for ${sideName(loser)}?`;
+    $('resignText').textContent = S.mode === 'ai' ? 'The game ends and counts as a loss.' : `${sideName(loser ^ 1)} will win the game.`;
+    $('resignBox').classList.add('on');
+    $('resignNo').focus();
+  }
+  function confirmResign() {
+    $('resignBox').classList.remove('on');
+    if (over || !hist.length) return;
+    const loser = S.mode === 'ai' ? S.human : pos.turn;
     ai.cancel(); token++; thinking = false;
     over = { winner: loser ^ 1, reason: `${sideName(loser)} resigned` };
     sfx(S.mode === 'ai' ? 'lose' : 'win'); save(); render(false); showOver();
@@ -2294,6 +2311,7 @@ function ChessCore() {
   $('navFirst').onclick = () => go(0); $('navPrev').onclick = () => go(view - 1);
   $('navNext').onclick = () => go(view + 1); $('navLast').onclick = () => go(hist.length);
   $('hintBtn').onclick = showHint; $('undoBtn').onclick = undo; $('resignBtn').onclick = resign;
+  $('resignYes').onclick = confirmResign; $('resignNo').onclick = () => $('resignBox').classList.remove('on');
   $('flipBtn').onclick = () => { S.flipped = !S.flipped; save(); render(false); };
   $('pcFriendly').onclick = () => { S.pieces = 'friendly'; save(); render(false); };
   $('pcClassic').onclick = () => { S.pieces = 'classic'; save(); render(false); };
@@ -2307,7 +2325,7 @@ function ChessCore() {
   }
   addEventListener('keydown', e => {
     if (e.target.closest('input, textarea') || document.querySelector('.modal.on')) {
-      if (e.key === 'Escape') { $('setup').classList.remove('on'); $('over').classList.remove('on'); }
+      if (e.key === 'Escape') { $('setup').classList.remove('on'); $('over').classList.remove('on'); $('resignBox').classList.remove('on'); }
       return;
     }
     if (e.key === 'ArrowLeft') { go(view - 1); e.preventDefault(); }

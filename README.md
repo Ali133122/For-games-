@@ -162,6 +162,14 @@ Bounce from cloud to cloud and climb as high as you can. The sky turns from day 
 
 - **Move:** ←/→, the mouse, or the on-screen buttons. The sides of the screen wrap around
 
+### Dino Dash (sky deck)
+Open [`dino-dash/index.html`](dino-dash/index.html). Built with Flint.
+
+An endless runner starring a little teal raptor. Your score is how many years your dino lives. Jump over rocks, logs and tar pits, duck under low branches, and dodge rolling boulders. The world moves from the Triassic to the Jurassic to the Cretaceous, and it gets faster as you go. Grab amber for +150 years. Your longest life is saved.
+
+- **Jump:** Space, ↑ or a click (hold for a higher jump). **Duck / drop fast:** ↓. **Mute:** M
+- **Touch:** tap the right side to jump, hold the left side to duck
+
 ### Sparkwood
 Open [`sparkwood/index.html`](sparkwood/index.html) in a browser. It's built with Flint and works offline.
 

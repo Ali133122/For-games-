@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Dino Dash</title>
+<script src="../arcade-bridge.js"></script>
+<style>html, body { margin: 0; height: 100%; background: #2a1a2e; overflow: hidden; } canvas { display: block; width: 100%; height: 100%; }</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="../flint/flint.js"></script>
+<script>
+'use strict';
+// Dino Dash: run through prehistory, jump and duck, and see how many years your dino lives. Built with Flint.
+const { Game, Scene, text, store, clamp, damp, lerp, rand, pick, chance } = Flint;
+
+const W = 400, H = 200, GROUND = 168, DX = 70;
+const game = new Game({ canvas: '#game', width: W, height: H, background: '#2a1a2e', letterbox: '#1a1020', touchButtons: [] });
+game.input.bind('jump', ['Space', 'ArrowUp', 'KeyW', 'PadA', 'PadUp']);
+game.input.bind('duck', ['ArrowDown', 'KeyS', 'PadB', 'PadDown']);
+game.input.bind('go', ['Space', 'Enter', 'ArrowUp', 'PadA', 'PadStart', 'Pointer']);
+
+// three eras, each with its own sky and land; years decide which one you're in
+const ERAS = [
+  { name: 'TRIASSIC', at: 0, sky: ['#ffb46b', '#ffe3b0'], far: '#d98a5a', near: '#b9643f', ground: '#e0a165', dirt: '#b77845', plant: '#7a9a3a', sun: '#fff1c4' },
+  { name: 'JURASSIC', at: 2500, sky: ['#6fc4e8', '#d9f4ff'], far: '#5a9a7a', near: '#3f7a4f', ground: '#7fb05a', dirt: '#5a7f3a', plant: '#2f6a2f', sun: '#ffffff' },
+  { name: 'CRETACEOUS', at: 6000, sky: ['#2a1640', '#7a2f4a'], far: '#4a2a52', near: '#33203d', ground: '#5a3a4a', dirt: '#3f2834', plant: '#5a7a3a', sun: '#ff8a4a' },
+];
+const mixHex = (a, b, k) => { const pa = a.match(/\w\w/g).map((h) => parseInt(h, 16)), pb = b.match(/\w\w/g).map((h) => parseInt(h, 16)); return `rgb(${pa.map((v, i) => Math.round(lerp(v, pb[i], k))).join(',')})`; };
+function eraAt(years) {
+  let i = 0; while (i < ERAS.length - 1 && years >= ERAS[i + 1].at) i++;
+  const e = ERAS[i], n = ERAS[i + 1];
+  if (!n) return Object.assign({ index: i }, e);
+  const k = clamp((years - (n.at - 600)) / 600, 0, 1); // blend into the next era over the last 600 years
+  const out = { index: i, name: e.name };
+  for (const key of ['far', 'near', 'ground', 'dirt', 'plant', 'sun']) out[key] = mixHex(e[key].slice(1), n[key].slice(1), k);
+  out.sky = [mixHex(e.sky[0].slice(1), n.sky[0].slice(1), k), mixHex(e.sky[1].slice(1), n.sky[1].slice(1), k)];
+  return out;
+}
+
+class Run extends Scene {
+  enter() {
+    this.best = store.get('dinodash:best', 0);
+    this.state = 'title';
+    this.reset();
+  }
+  reset() {
+    Object.assign(this, { years: 0, dist: 0, speed: 230, things: [], nextAt: 260, amber: 0, flash: 0, banner: null, eraIndex: 0, scroll: 0 });
+    this.dino = { y: GROUND, vy: 0, duck: false, onGround: true, legT: 0, blink: 0, dead: false, spin: 0 };
+    this.touchDuck = false;
+  }
+  begin() { this.reset(); this.state = 'run'; this.audio.sfx('select'); this.banner = { text: 'TRIASSIC', t: 1.6 }; }
+  // what's coming: chosen so there's always time to react at the current speed
+  spawn() {
+    const s = this.speed, x = W + 30, late = this.years > 900, later = this.years > 2500;
+    const kinds = ['rock', 'rock', 'log'];
+    if (late) kinds.push('tar', 'branch');
+    if (later) kinds.push('roller', 'branch', 'cluster');
+    const kind = pick(kinds);
+    if (kind === 'rock') { const big = chance(0.4); this.things.push({ kind, x, w: big ? 18 : 12, h: big ? 20 : 13 }); }
+    else if (kind === 'cluster') this.things.push({ kind: 'rock', x, w: 30, h: 16, cluster: true });
+    else if (kind === 'log') this.things.push({ kind, x, w: 34, h: 12 });
+    else if (kind === 'tar') this.things.push({ kind, x, w: clamp(40 + s * 0.08, 44, 74), h: 0, bub: [] });
+    else if (kind === 'branch') this.things.push({ kind, x, w: 60, h: 10, y: GROUND - 34 - rand(0, 4) });
+    else if (kind === 'roller') this.things.push({ kind, x, w: 18, h: 18, extra: rand(50, 90), rot: 0 });
+    if (chance(0.35)) this.things.push({ kind: 'amber', x: x + rand(60, 140), w: 9, h: 11, y: GROUND - rand(40, 75) });
+    this.nextAt = this.dist + clamp(s * 0.62, 150, 340) + rand(40, 220);
+  }
+  update(dt) {
+    const input = this.input, d = this.dino, p = input.pointer;
+    if (input.pressed('KeyM')) this.audio.toggleMute();
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    this.flash = Math.max(0, this.flash - dt);
+    if (this.state !== 'run') {
+      d.legT += dt * (this.state === 'title' ? 8 : 0);
+      if (this.state === 'dead') { d.vy += 1600 * dt; d.y = Math.min(GROUND + 6, d.y + d.vy * dt); d.spin += dt * 6; }
+      if (this.time > 0.4 && input.pressed('go') && (this.state === 'title' || this.time - this.deadAt > 0.9)) this.begin();
+      return;
+    }
+    // touch: tap the right side to jump, hold the left side to duck
+    let jumpPressed = input.pressed('jump'), jumpHeld = input.down('jump'), duck = input.down('duck');
+    if (p.type === 'touch' || p.type === 'pen') {
+      if (p.pressed && p.x > W * 0.4) jumpPressed = true;
+      if (p.down && p.x > W * 0.4) jumpHeld = true;
+      if (p.down && p.x <= W * 0.4) duck = true;
+    } else if (p.pressed) jumpPressed = true; // a mouse click jumps too
+    if (p.down && p.type === 'mouse') jumpHeld = true;
+
+    this.speed = Math.min(560, this.speed + dt * 7);
+    const step = this.speed * dt;
+    this.dist += step; this.scroll += step;
+    this.years += step * 0.55;
+    // jumping: hold for a higher jump, ↓ in the air drops you fast
+    if (jumpPressed && d.onGround) { d.vy = -500; d.onGround = false; this.audio.sfx('jump'); this.particles.emit(DX, GROUND, { count: 6, speed: [15, 45], angle: -Math.PI / 2, spread: 2.4, life: [0.2, 0.4], color: '#e8d0a8' }); }
+    const g = d.vy < 0 && jumpHeld ? 1300 : 2100;
+    d.vy += (duck && !d.onGround ? 3600 : g) * dt;
+    d.y += d.vy * dt;
+    if (d.y >= GROUND) { if (!d.onGround) { this.audio.sfx('land'); this.particles.emit(DX, GROUND, { count: 4, speed: [10, 30], angle: -Math.PI / 2, spread: 2.6, life: [0.15, 0.3], color: '#e8d0a8' }); } d.y = GROUND; d.vy = 0; d.onGround = true; }
+    d.duck = duck && d.onGround;
+    d.legT += dt * (8 + this.speed / 40);
+    d.blink = d.blink > 0 ? d.blink - dt : Math.random() < dt * 0.4 ? 0.12 : 0;
+
+    if (this.dist >= this.nextAt) this.spawn();
+    for (const t of this.things) {
+      t.x -= step + (t.kind === 'roller' ? t.extra * dt : 0);
+      if (t.kind === 'roller') t.rot -= (step + t.extra * dt) / 9;
+      if (t.kind === 'tar' && Math.random() < dt * 4) t.bub.push({ x: rand(4, t.w - 4), r: 0, life: 0.6 });
+      if (t.bub) { for (const b of t.bub) { b.life -= dt; b.r += dt * 6; } t.bub = t.bub.filter((b) => b.life > 0); }
+    }
+    this.things = this.things.filter((t) => t.x + t.w > -40 && !t.got);
+
+    // the dino's body: shorter and lower while ducking
+    const body = d.duck ? { x: DX - 15, y: d.y - 14, w: 34, h: 13 } : { x: DX - 10, y: d.y - 30, w: 22, h: 28 };
+    const hits = (r) => body.x < r.x + r.w && body.x + body.w > r.x && body.y < r.y + r.h && body.y + body.h > r.y;
+    for (const t of this.things) {
+      if (t.kind === 'amber') {
+        if (hits({ x: t.x - 3, y: t.y - 3, w: t.w + 6, h: t.h + 6 })) { t.got = true; this.years += 150; this.amber++; this.audio.sfx('coin'); this.particles.emit(t.x + 4, t.y + 5, { count: 12, speed: [20, 60], life: [0.3, 0.6], color: ['#ffb020', '#ffe080', '#ffffff'] }); this.flash = 0.6; }
+        continue;
+      }
+      let box;
+      if (t.kind === 'tar') { if (d.onGround && DX > t.x + 6 && DX < t.x + t.w - 6) return this.die(t); continue; }
+      if (t.kind === 'branch') box = { x: t.x + 4, y: t.y, w: t.w - 8, h: t.h };
+      else if (t.kind === 'roller') box = { x: t.x + 3, y: GROUND - t.h + 3, w: t.w - 6, h: t.h - 4 };
+      else box = { x: t.x + 3, y: GROUND - t.h + 3, w: t.w - 6, h: t.h - 3 };
+      if (hits(box)) return this.die(t);
+    }
+    // new era
+    const e = eraAt(this.years);
+    if (e.index !== this.eraIndex) { this.eraIndex = e.index; this.banner = { text: e.name, t: 2 }; this.audio.sfx('powerup'); }
+    // a little chime every 1000 years
+    if (Math.floor(this.years / 1000) !== Math.floor((this.years - step * 0.55) / 1000)) this.audio.tone({ freq: 880, to: 1320, dur: 0.15, type: 'triangle', vol: 0.08 });
+  }
+  die(t) {
+    this.state = 'dead'; this.deadAt = this.time;
+    const d = this.dino; d.dead = true; d.vy = -260;
+    this.camera.shake(4, 0.35);
+    this.audio.sfx(t.kind === 'tar' ? 'lose' : 'hurt');
+    this.particles.emit(DX, d.y - 14, { count: 20, speed: [30, 100], life: [0.3, 0.7], color: ['#3fb8a8', '#ffd23f', '#ffffff'], gravity: 300 });
+    const y = Math.floor(this.years);
+    this.newBest = y > this.best;
+    if (this.newBest) { this.best = y; store.set('dinodash:best', y); }
+  }
+  blur() { /* the dino keeps running only while you watch: nothing to pause here, runs are short */ }
+
+  drawBackground(ctx) {
+    const e = eraAt(this.years), s = this.scroll;
+    const g = ctx.createLinearGradient(0, 0, 0, GROUND); g.addColorStop(0, e.sky[0]); g.addColorStop(1, e.sky[1]);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // sun or volcano glow
+    ctx.fillStyle = e.sun; ctx.globalAlpha = 0.85; ctx.beginPath(); ctx.arc(300, 52, 18, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    if (e.index === 2) { ctx.fillStyle = 'rgba(255,255,255,.7)'; for (let i = 0; i < 30; i++) ctx.fillRect((i * 97 - s * 0.02) % W < 0 ? (i * 97 - s * 0.02) % W + W : (i * 97 - s * 0.02) % W, (i * 41) % 90, 1, 1); }
+    // far hills, with a smoking volcano that drifts by
+    const hill = (color, par, base, amp, f) => { ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(0, GROUND); for (let x = 0; x <= W; x += 5) ctx.lineTo(x, base - Math.abs(Math.sin((x + s * par) * f)) * amp - Math.sin((x + s * par) * f * 2.7) * amp * 0.25); ctx.lineTo(W, GROUND); ctx.fill(); };
+    hill(e.far, 0.12, GROUND - 40, 34, 0.012);
+    const vx = ((260 - s * 0.12) % 900 + 900) % 900 - 150;
+    ctx.fillStyle = e.far; ctx.beginPath(); ctx.moveTo(vx - 70, GROUND - 30); ctx.lineTo(vx - 14, GROUND - 108); ctx.lineTo(vx + 14, GROUND - 108); ctx.lineTo(vx + 70, GROUND - 30); ctx.fill();
+    ctx.fillStyle = e.index === 2 ? 'rgba(255,120,60,.8)' : 'rgba(255,255,255,.35)';
+    for (let i = 0; i < 4; i++) { const k = (this.time * 0.3 + i / 4) % 1; ctx.globalAlpha = 1 - k; ctx.beginPath(); ctx.arc(vx + Math.sin(i * 2 + this.time) * 6, GROUND - 112 - k * 40, 6 + k * 10, 0, Math.PI * 2); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    hill(e.near, 0.3, GROUND - 14, 20, 0.02);
+    // ferns and palms
+    ctx.strokeStyle = e.plant; ctx.fillStyle = e.plant; ctx.lineWidth = 2;
+    for (let i = 0; i < 8; i++) {
+      const x = ((i * 83 - s * 0.55) % (W + 80) + W + 80) % (W + 80) - 40;
+      if (i % 3 === 0) { ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.quadraticCurveTo(x + 4, GROUND - 20, x + 2, GROUND - 38); ctx.stroke(); for (let k = 0; k < 5; k++) { const a = -Math.PI + (k / 4) * Math.PI; ctx.beginPath(); ctx.moveTo(x + 2, GROUND - 38); ctx.quadraticCurveTo(x + 2 + Math.cos(a) * 10, GROUND - 46, x + 2 + Math.cos(a) * 16, GROUND - 36 + Math.abs(Math.sin(a)) * 2); ctx.stroke(); } }
+      else for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.quadraticCurveTo(x + k * 4, GROUND - 8, x + k * 7, GROUND - 6 + Math.abs(k)); ctx.stroke(); }
+    }
+    // the ground
+    ctx.fillStyle = e.ground; ctx.fillRect(0, GROUND, W, H - GROUND);
+    ctx.fillStyle = e.dirt;
+    for (let i = 0; i < 26; i++) { const x = ((i * 37 - s) % (W + 20) + W + 20) % (W + 20) - 10; ctx.fillRect(x, GROUND + 6 + (i * 13) % 22, 6 + (i % 3) * 3, 2); }
+    ctx.fillStyle = 'rgba(0,0,0,.15)'; ctx.fillRect(0, GROUND, W, 2);
+  }
+  drawThing(ctx, t) {
+    const e = eraAt(this.years);
+    if (t.kind === 'rock') {
+      ctx.fillStyle = '#8a7a7a'; ctx.strokeStyle = '#5a4a4f'; ctx.lineWidth = 1.5;
+      const parts = t.cluster ? [[0, 11, 12], [10, 16, 14], [20, 10, 10]] : [[0, t.h, t.w]];
+      for (const [ox, h, w] of parts) { ctx.beginPath(); ctx.moveTo(t.x + ox, GROUND); ctx.lineTo(t.x + ox + w * 0.15, GROUND - h * 0.8); ctx.lineTo(t.x + ox + w * 0.5, GROUND - h); ctx.lineTo(t.x + ox + w * 0.9, GROUND - h * 0.7); ctx.lineTo(t.x + ox + w, GROUND); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.fillStyle = 'rgba(255,255,255,.2)'; ctx.fillRect(t.x + ox + w * 0.3, GROUND - h * 0.75, w * 0.2, 2); ctx.fillStyle = '#8a7a7a'; }
+    } else if (t.kind === 'log') {
+      ctx.fillStyle = '#8a5a34'; ctx.fillRect(t.x, GROUND - t.h, t.w, t.h);
+      ctx.fillStyle = '#c99060'; ctx.beginPath(); ctx.ellipse(t.x + t.w, GROUND - t.h / 2, 4, t.h / 2, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#6a4024'; ctx.beginPath(); ctx.moveTo(t.x + 4, GROUND - t.h / 2); ctx.lineTo(t.x + t.w - 6, GROUND - t.h / 2 - 1); ctx.stroke();
+      ctx.fillStyle = '#5a8a3a'; ctx.fillRect(t.x + 10, GROUND - t.h - 3, 6, 3);
+    } else if (t.kind === 'tar') {
+      ctx.fillStyle = '#1a1018'; ctx.beginPath(); ctx.ellipse(t.x + t.w / 2, GROUND + 4, t.w / 2, 7, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(120,80,160,.35)'; ctx.beginPath(); ctx.ellipse(t.x + t.w / 2 - 6, GROUND + 2, t.w / 4, 2, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(160,120,200,.6)'; ctx.lineWidth = 1;
+      for (const b of t.bub) { ctx.globalAlpha = b.life / 0.6; ctx.beginPath(); ctx.arc(t.x + b.x, GROUND + 2, b.r, Math.PI, 0); ctx.stroke(); }
+      ctx.globalAlpha = 1;
+    } else if (t.kind === 'branch') {
+      ctx.strokeStyle = '#6a4024'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(t.x - 6, t.y - 30); ctx.quadraticCurveTo(t.x + 10, t.y, t.x + t.w, t.y + 3); ctx.stroke();
+      ctx.fillStyle = e.plant;
+      for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.ellipse(t.x + 6 + i * 9, t.y + 4 + (i % 2) * 3, 6, 3.5, 0.4, 0, Math.PI * 2); ctx.fill(); }
+      ctx.strokeStyle = e.plant; ctx.lineWidth = 1.5; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(t.x + 12 + i * 16, t.y + 5); ctx.lineTo(t.x + 12 + i * 16, t.y + 12 + i * 2); ctx.stroke(); }
+    } else if (t.kind === 'roller') {
+      const cx = t.x + t.w / 2, cy = GROUND - t.h / 2;
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(t.rot);
+      ctx.fillStyle = '#7a6a70'; ctx.beginPath(); ctx.arc(0, 0, t.h / 2, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#4a3a40'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(-5, -3); ctx.lineTo(3, 2); ctx.lineTo(6, -4); ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = 'rgba(232,208,168,.5)'; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(t.x + t.w + 4 + i * 5, GROUND - 2 - i, 2 + i, 0, Math.PI * 2); ctx.fill(); }
+    } else if (t.kind === 'amber') {
+      const bob = Math.sin(this.time * 4 + t.x * 0.05) * 2;
+      ctx.save(); ctx.translate(t.x + t.w / 2, t.y + t.h / 2 + bob);
+      ctx.fillStyle = 'rgba(255,190,60,.3)'; ctx.beginPath(); ctx.arc(0, 0, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffa820'; ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(5, -1); ctx.lineTo(3, 6); ctx.lineTo(-3, 6); ctx.lineTo(-5, -1); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#5a3a10'; ctx.fillRect(-1, 0, 2, 2); // a tiny bug trapped inside
+      ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.fillRect(-3, -3, 2, 2);
+      ctx.restore();
+    }
+  }
+  drawDino(ctx) {
+    const d = this.dino, x = DX, y = d.y, run = d.onGround && !d.dead, leg = Math.sin(d.legT);
+    ctx.save(); ctx.translate(x, y);
+    if (d.dead) { ctx.rotate(Math.min(d.spin, Math.PI * 0.6)); }
+    const body = '#3fb8a8', belly = '#c9f0d8', stripe = '#2a8a7f', dark = '#1f4a4a';
+    if (d.duck) {
+      // low and long, head forward
+      ctx.fillStyle = body; ctx.beginPath(); ctx.ellipse(-2, -8, 15, 7, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-14, -9); ctx.quadraticCurveTo(-26, -9, -32, -4); ctx.quadraticCurveTo(-24, -5, -14, -5); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(16, -9, 8, 5.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = belly; ctx.beginPath(); ctx.ellipse(0, -4, 10, 3, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = stripe; for (let i = 0; i < 3; i++) ctx.fillRect(-8 + i * 6, -15, 3, 4);
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(18, -11, 2.4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = dark; ctx.beginPath(); ctx.arc(18.6, -11, 1.3, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = body; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(-4, -2); ctx.lineTo(-6 + leg * 4, 0); ctx.moveTo(6, -2); ctx.lineTo(4 - leg * 4, 0); ctx.stroke();
+    } else {
+      // legs
+      ctx.strokeStyle = '#2f9a8c'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+      const a = run ? leg * 5 : d.vy < 0 ? -3 : 3, b = run ? -leg * 5 : d.vy < 0 ? 2 : -2;
+      ctx.beginPath(); ctx.moveTo(-3, -10); ctx.lineTo(-4 + a, -1); ctx.lineTo(-1 + a, 0); ctx.stroke();
+      ctx.strokeStyle = body;
+      ctx.beginPath(); ctx.moveTo(3, -10); ctx.lineTo(3 + b, -1); ctx.lineTo(6 + b, 0); ctx.stroke();
+      // tail
+      ctx.fillStyle = body; ctx.beginPath(); ctx.moveTo(-8, -20); ctx.quadraticCurveTo(-22, -18 + Math.sin(d.legT * 0.5) * 2, -30, -12 + Math.sin(d.legT * 0.5) * 3); ctx.quadraticCurveTo(-20, -11, -7, -12); ctx.fill();
+      // body and belly
+      ctx.beginPath(); ctx.ellipse(0, -17, 11, 10, -0.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = belly; ctx.beginPath(); ctx.ellipse(3, -14, 6, 6, -0.2, 0, Math.PI * 2); ctx.fill();
+      // neck and head
+      ctx.fillStyle = body; ctx.beginPath(); ctx.ellipse(8, -27, 5, 7, 0.4, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(13, -33, 9, 6.5, 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = belly; ctx.beginPath(); ctx.ellipse(16, -30, 5, 2.2, 0.1, 0, Math.PI * 2); ctx.fill();
+      // little arm
+      ctx.strokeStyle = '#2f9a8c'; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(7, -18); ctx.lineTo(11, -15 + (run ? leg : 0)); ctx.stroke();
+      // stripes and crest
+      ctx.fillStyle = stripe; for (let i = 0; i < 3; i++) { ctx.save(); ctx.translate(-6 + i * 5, -25 + i); ctx.rotate(0.3); ctx.fillRect(0, 0, 3, 5); ctx.restore(); }
+      ctx.fillStyle = '#ffd23f'; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(6 + i * 4, -38 + i); ctx.lineTo(8 + i * 4, -43 + i * 1.5); ctx.lineTo(10 + i * 4, -38 + i); ctx.fill(); }
+      // eye (a cross when it's all over)
+      if (d.dead) { ctx.strokeStyle = dark; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(14, -37); ctx.lineTo(18, -33); ctx.moveTo(18, -37); ctx.lineTo(14, -33); ctx.stroke(); }
+      else if (d.blink > 0) { ctx.strokeStyle = dark; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(14, -35); ctx.lineTo(18, -35); ctx.stroke(); }
+      else { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(16, -35, 2.8, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = dark; ctx.beginPath(); ctx.arc(16.8, -35, 1.5, 0, Math.PI * 2); ctx.fill(); }
+      ctx.fillStyle = '#ff8fa0'; ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(13, -30, 1.8, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,.18)'; const k = clamp(1 - (GROUND - d.y) / 120, 0.3, 1);
+    ctx.beginPath(); ctx.ellipse(x, GROUND + 1, 12 * k, 2.5 * k, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  drawWorld(ctx) {
+    for (const t of this.things) this.drawThing(ctx, t);
+    this.drawDino(ctx);
+  }
+  drawUI(ctx) {
+    const t = (s, x, y, o) => text(ctx, s, x, y, Object.assign({ size: 9, color: '#ffffff', weight: '800', shadow: 'rgba(40,20,40,.45)', font: 'system-ui, -apple-system, "Segoe UI", sans-serif' }, o));
+    const yrs = (n) => Math.floor(n).toLocaleString('en-US');
+    if (this.state === 'title') {
+      t('DINO DASH', W / 2, 28, { size: 30, align: 'center', weight: '900', color: '#ffffff' });
+      t('run through prehistory · how many years can your dino live?', W / 2, 64, { size: 9, align: 'center', weight: '600' });
+      t('Space / ↑ / click jumps (hold for higher) · ↓ ducks under branches and drops you fast', W / 2, 78, { size: 7, align: 'center', weight: '500' });
+      t('touch: tap the right side to jump, hold the left side to duck · grab amber for +150 years', W / 2, 89, { size: 7, align: 'center', weight: '500' });
+      if (Math.floor(this.time * 2) % 2 === 0) t('press Space or tap to start', W / 2, 108, { size: 10, align: 'center', color: '#ffe066' });
+      if (this.best) t(`longest life: ${yrs(this.best)} years`, W / 2, 122, { size: 8, align: 'center', color: '#ffe066' });
+      return;
+    }
+    t(`${yrs(this.years)} years`, W - 10, 8, { size: 12, align: 'right', color: this.flash > 0 ? '#ffd23f' : '#ffffff' });
+    t(`best ${yrs(this.best)}`, W - 10, 24, { size: 7, align: 'right', weight: '600' });
+    t(eraAt(this.years).name, 10, 8, { size: 8, weight: '700', alpha: 0.85 });
+    if (this.amber) t(`amber ${this.amber}`, 10, 20, { size: 7, color: '#ffc040', weight: '700' });
+    if (this.banner) t(this.banner.text + ' PERIOD', W / 2, 40, { size: 16, align: 'center', weight: '900', alpha: clamp(this.banner.t, 0, 1) });
+    if (this.state === 'dead') {
+      ctx.fillStyle = 'rgba(40,20,40,.55)'; ctx.fillRect(0, 44, W, 84);
+      t('EXTINCT!', W / 2, 52, { size: 22, align: 'center', weight: '900', color: '#ff8a6a' });
+      t(`your dino lived ${yrs(this.years)} years`, W / 2, 82, { size: 11, align: 'center' });
+      t(this.newBest ? 'a new record!' : `longest life: ${yrs(this.best)} years`, W / 2, 98, { size: 8, align: 'center', color: '#ffe066' });
+      if (this.time - this.deadAt > 0.9) t('Space or tap to hatch a new dino', W / 2, 113, { size: 8, align: 'center', weight: '600' });
+    }
+  }
+}
+
+game.start(new Run());
+window.dinoDash = game;
+</script>
+</body>
+</html>

@@ -164,4 +164,12 @@ window.ARCADE_GAMES = [
     controls: '←/→ or mouse · the sides wrap around',
     room: 3,
   },
+  {
+    title: 'Dino Dash',
+    path: 'dino-dash/index.html',
+    color: '#3fb8a8',
+    tagline: 'Run through prehistory: how many years can your dino live?',
+    controls: 'Space / ↑ jump · ↓ duck · touch: tap right to jump, hold left to duck',
+    room: 3,
+  },
 ];

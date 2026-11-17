@@ -4,7 +4,8 @@ A repo for games
 ## Flint Arcade
 Open [`index.html`](index.html) in a browser to walk around a 3D neon arcade. Every game in this repo is a cabinet. Walk up to one and press <kbd>E</kbd> (or tap it) to play, and use **← Back to arcade** to return.
 
-- **Walk:** WASD or ↑/↓. **Look:** drag with the mouse, or ←/→ to turn. **Play:** E, Enter or Space
+- **Walk:** WASD or ↑/↓. **Look:** click once to lock the mouse, then just move it (or use ←/→ to turn). **Play:** E, Enter, Space, or click
+- **Esc** frees the mouse and opens the arcade menu: **Resume** (locks the mouse again), **All games**, **Add a game** and **Sound**
 - **Touch:** your left thumb walks, your right thumb looks, and tapping a cabinet plays it
 - **All games** lists every game with a Play button, if you'd rather skip the walk
 - **Esc while playing** opens a menu: **Resume**, **Restart game** or **Back to the arcade**. The ☰ Menu button at the top does the same, and so does a gamepad's Select/Back button. The game is frozen, sound included, until you pick one
@@ -137,7 +138,7 @@ Open [`neon-maze/index.html`](neon-maze/index.html). A 3D game built with Flint3
 
 A first-person maze. Find every glowing orb before the clock runs out. Each orb adds 6 seconds, and the minimap fills in as you explore. A red sentry patrols the corridors and chases you if it spots you down a straight hallway. Getting caught costs 10 seconds. Each maze you clear brings a bigger one with more orbs.
 
-- **Move:** WASD. **Look:** drag the mouse, or ←/→. On touch screens, your left thumb walks and your right thumb looks
+- **Move:** WASD. **Look:** click to lock the mouse, then move it (or use ←/→). **Esc** frees the mouse and pauses the game; in the arcade it opens the arcade's menu. On touch screens, your left thumb walks and your right thumb looks
 
 ### Bumper Ring (sky deck)
 Open [`bumper-ring/index.html`](bumper-ring/index.html). A 3D game built with Flint3D.

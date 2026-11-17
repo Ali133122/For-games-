@@ -840,6 +840,8 @@
       for (const k in DEFAULT_BINDINGS) this.bindings[k] = DEFAULT_BINDINGS[k].slice();
       this.pointer = { x: 0, y: 0, down: false, pressed: false, released: false, id: null, type: 'mouse' };
       this.stick = { x: 0, y: 0 };
+      this.mouseDelta = { x: 0, y: 0 }; // mouse movement since the last step while the pointer is locked
+      this.pointerLocked = false;
       this.gamepad = null;
       this.touchActive = false;
       this.touchLayout = opts.touchButtons || ['left', 'right', 'a', 'b'];
@@ -892,7 +894,22 @@
       this._syncVirtual('pad', now);
     }
     /** Called by the game after every fixed update. */
+    /**
+     * Lock the mouse to the game for first-person looking (call it from a click or key press).
+     * While locked, read input.mouseDelta for movement. The browser unlocks on Esc; when that
+     * happens the current scene's pointerUnlocked() is called (a good place to open a pause menu).
+     */
+    lockPointer() {
+      const c = this.game && this.game.canvas;
+      if (!c || !c.requestPointerLock || this.pointerLocked) return false;
+      this._wantLock = true;
+      try { const r = c.requestPointerLock(); if (r && r.catch) r.catch(() => { this._wantLock = false; }); } catch (e) { this._wantLock = false; return false; }
+      return true;
+    }
+    /** Release the mouse without counting it as the player pressing Esc. */
+    unlockPointer() { this._quietUnlock = true; if (hasDOM && document.pointerLockElement) document.exitPointerLock(); else this._quietUnlock = false; }
     _endStep() {
+      this.mouseDelta.x = 0; this.mouseDelta.y = 0;
       this._pressed.clear(); this._released.clear();
       this.pointer.pressed = false; this.pointer.released = false;
     }
@@ -980,6 +997,27 @@
       addEventListener('pointerup', up);
       addEventListener('pointercancel', up);
       canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+      // pointer lock: track it, collect mouse movement, and tell the scene when it's lost
+      addEventListener('mousemove', (e) => {
+        if (!this.pointerLocked) return;
+        // browsers can report one huge bogus movement right after locking: skip the first event and any wild ones
+        if (this._skipMoves > 0) { this._skipMoves--; return; }
+        const mx = e.movementX || 0, my = e.movementY || 0;
+        if (Math.abs(mx) > 250 || Math.abs(my) > 250) return;
+        this.mouseDelta.x += mx; this.mouseDelta.y += my;
+      });
+      document.addEventListener('pointerlockchange', () => {
+        const locked = document.pointerLockElement === canvas, was = this.pointerLocked;
+        this.pointerLocked = locked; this._wantLock = false;
+        if (locked) this._skipMoves = 1;
+        if (was && !locked) {
+          const quiet = this._quietUnlock; this._quietUnlock = false;
+          for (const c of [...this.held]) this._release(c);
+          const s = this.game.scene;
+          if (!quiet && s && s.pointerUnlocked) s.pointerUnlocked();
+        }
+      });
+      document.addEventListener('pointerlockerror', () => { this._wantLock = false; });
     }
   }
 

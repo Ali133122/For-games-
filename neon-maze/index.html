@@ -71,6 +71,11 @@ class Maze extends Scene3D {
     this.state = 'title';
   }
   exit() { this.detachPointer(); }
+  // Esc unlocks the mouse: inside the arcade that opens the arcade's menu, on its own page the game pauses
+  pointerUnlocked() {
+    if (this.state !== 'play') return;
+    if (window.FlintArcade) window.FlintArcade.openMenu(); else this.state = 'paused';
+  }
   build(n) {
     this.root.children.slice().forEach((c) => c.destroy());
     this.env.lights = [];
@@ -114,18 +119,21 @@ class Maze extends Scene3D {
     this.seen = new Set(['0,0']);
     this.placeCamera(0);
   }
-  begin() { this.level = 0; this.score = 0; this.build(7); this.timeLeft = 75; this.state = 'play'; this.hurtT = 0; this.audio.sfx('select'); }
+  begin() { this.level = 0; this.score = 0; this.build(7); this.timeLeft = 75; this.state = 'play'; this.hurtT = 0; this.audio.sfx('select'); if (!this.input.touchActive) this.input.lockPointer(); }
   attachPointer() {
     const el = this.game.canvas, ptrs = new Map();
     this._down = (e) => {
-      const p = this.game.toLogical(e.clientX, e.clientY), role = e.pointerType === 'touch' && p.x < this.width * 0.45 ? 'move' : 'look';
+      const p = this.game.toLogical(e.clientX, e.clientY);
+      // mouse: a click locks it, then moving it looks around (drag-to-look if the browser won't lock)
+      if (e.pointerType === 'mouse' && !this.input.pointerLocked && (this.state === 'play' || this.state === 'paused')) { this.state = 'play'; if (this.input.lockPointer()) return; }
+      const role = e.pointerType === 'touch' && p.x < this.width * 0.45 ? 'move' : 'look';
       ptrs.set(e.pointerId, { role, sx: p.x, sy: p.y, x: p.x, y: p.y });
       if (role === 'move') this.stick = { x: p.x, y: p.y, dx: 0, dy: 0 };
     };
     this._move = (e) => {
       const s = ptrs.get(e.pointerId); if (!s) return;
       const p = this.game.toLogical(e.clientX, e.clientY);
-      if (s.role === 'look') { this.look.dx += p.x - s.x; this.look.dy += p.y - s.y; }
+      if (s.role === 'look' && !this.input.pointerLocked) { this.look.dx += p.x - s.x; this.look.dy += p.y - s.y; }
       else if (this.stick) { this.stick.dx = clamp(p.x - s.sx, -50, 50); this.stick.dy = clamp(p.y - s.sy, -50, 50); }
       s.x = p.x; s.y = p.y;
     };
@@ -161,6 +169,12 @@ class Maze extends Scene3D {
     for (const o of this.orbs) if (!o.got) { o.node.rotation.y += dt * 2; o.node.position.y = 1.3 + Math.sin(t * 2 + o.x) * 0.12; }
     this.sentry.node.rotation.y += dt * 3;
     this.camera.fov = this.width < this.height ? 88 : 72;
+    if (this.state === 'paused') {
+      if (input.pressed('Escape') || input.pressed('KeyP') || input.pressed('Enter') || input.pressed('Space')) { this.state = 'play'; if (!input.touchActive) input.lockPointer(); }
+      this.look.dx = this.look.dy = 0;
+      return;
+    }
+    if (this.state === 'play' && (input.pressed('Escape') || input.pressed('KeyP'))) { input.unlockPointer(); this.state = 'paused'; return; }
     if (this.state !== 'play') {
       this.yaw += dt * 0.25; this.placeCamera(0);
       if (this.time > 0.5 && input.pressed('go') && (this.state === 'title' || this.time - this.overAt > 1.2)) this.begin();
@@ -170,6 +184,7 @@ class Maze extends Scene3D {
     this.timeLeft -= dt; this.hurtT = Math.max(0, this.hurtT - dt);
     if (this.timeLeft <= 0) { this.timeLeft = 0; return this.end(); }
     // look and move, like the arcade itself
+    if (input.pointerLocked) { this.look.dx += input.mouseDelta.x; this.look.dy += input.mouseDelta.y; }
     this.yaw += this.look.dx * 0.0045 + input.axis('turnL', 'turnR') * 2.3 * dt;
     this.pitch = clamp(this.pitch - this.look.dy * 0.0035, -0.9, 0.9);
     this.look.dx = this.look.dy = 0;
@@ -227,7 +242,7 @@ class Maze extends Scene3D {
       t('NEON MAZE', W / 2, H * 0.12, { size: big * 0.1, color: '#29e3ff' });
       t('find every glowing orb before the clock runs out · each one adds 6 seconds', W / 2, H * 0.12 + big * 0.13, { size: Math.max(11, big * 0.026), weight: '500' });
       t('the red sentry hunts you if it spots you down a corridor · a touch costs 10 seconds', W / 2, H * 0.12 + big * 0.17, { size: Math.max(11, big * 0.026), weight: '500', color: '#ff8090' });
-      t('WASD move · drag mouse or ←/→ to look · touch: left thumb walks, right thumb looks', W / 2, H * 0.12 + big * 0.21, { size: Math.max(10, big * 0.022), weight: '500', color: '#a8b8d8' });
+      t('WASD move · mouse or ←/→ to look · Esc pauses · touch: left thumb walks, right thumb looks', W / 2, H * 0.12 + big * 0.21, { size: Math.max(10, big * 0.022), weight: '500', color: '#a8b8d8' });
       if (Math.floor(this.time * 2) % 2 === 0) t('press Enter or tap to enter the maze', W / 2, H * 0.84, { size: Math.max(14, big * 0.034) });
       if (this.best) t(`best ${this.best}`, W / 2, H * 0.84 + big * 0.055, { size: Math.max(12, big * 0.028), color: '#8dffa8' });
       return;
@@ -255,6 +270,12 @@ class Maze extends Scene3D {
     if (this.hurtT > 1.5) { ctx.fillStyle = `rgba(255,40,60,${(this.hurtT - 1.5) * 0.6})`; ctx.fillRect(0, 0, W, H); }
     if (this.msg) { this.msg.t -= 1 / 60; t(this.msg.text, W / 2, H * 0.3, { size: Math.max(15, big * 0.035), color: '#8dffa8', alpha: Math.min(1, this.msg.t * 2) }); if (this.msg.t <= 0) this.msg = null; }
     if (this.state === 'play') { ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.beginPath(); ctx.arc(W / 2, H / 2, 2, 0, Math.PI * 2); ctx.fill(); }
+    if (this.state === 'play' && !this.input.pointerLocked && !this.input.touchActive) t('click to look around with the mouse', W / 2, H - 28, { size: 13, weight: '500', color: '#a8b8d8' });
+    if (this.state === 'paused') {
+      ctx.fillStyle = 'rgba(5,4,10,.75)'; ctx.fillRect(0, 0, W, H);
+      t('PAUSED', W / 2, H * 0.38, { size: big * 0.09, color: '#29e3ff' });
+      t('click, or press Esc or Enter, to carry on', W / 2, H * 0.38 + big * 0.12, { size: Math.max(13, big * 0.03), weight: '500' });
+    }
     if (this.stick) {
       ctx.globalAlpha = 0.35; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(this.stick.x, this.stick.y, 50, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 0.6; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(this.stick.x + this.stick.dx, this.stick.y + this.stick.dy, 20, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;

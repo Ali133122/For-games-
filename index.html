@@ -49,16 +49,16 @@
   #player header b { font: 700 14px var(--mono); letter-spacing: .1em; }
   #player iframe { border: 0; width: 100%; height: 100%; background: #000; }
   #player header .hint { color: var(--muted); font: 12px var(--mono); margin-left: auto; }
-  #gameMenu { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(5, 4, 10, .72); backdrop-filter: blur(4px);
+  #gameMenu, #arcadeMenu { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(5, 4, 10, .72); backdrop-filter: blur(4px);
     padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
-  #gameMenu .box { width: min(340px, 100%); display: grid; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--accent);
+  #arcadeMenu .box, #gameMenu .box { width: min(340px, 100%); display: grid; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--accent);
     border-radius: 12px; padding: 22px; box-shadow: 0 20px 60px rgba(0, 0, 0, .6); }
-  #gameMenu h2 { margin: 0 0 2px; font: 700 13px var(--mono); letter-spacing: .14em; color: var(--muted); }
-  #gameMenu .name { margin: 0 0 10px; font: 700 22px var(--mono); letter-spacing: .06em; color: var(--accent); }
-  #gameMenu button { font-size: 16px; padding: 12px 14px; text-align: left; display: flex; justify-content: space-between; align-items: center; }
-  #gameMenu button kbd { font: 12px var(--mono); color: var(--muted); }
-  #gameMenu button:focus-visible, #gameMenu button:hover { border-color: var(--accent); outline: none; background: rgba(255, 255, 255, .06); }
-  #gameMenu .foot { margin: 6px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
+  #arcadeMenu h2, #gameMenu h2 { margin: 0 0 2px; font: 700 13px var(--mono); letter-spacing: .14em; color: var(--muted); }
+  #arcadeMenu .name, #gameMenu .name { margin: 0 0 10px; font: 700 22px var(--mono); letter-spacing: .06em; color: var(--accent); }
+  #arcadeMenu button, #gameMenu button { font-size: 16px; padding: 12px 14px; text-align: left; display: flex; justify-content: space-between; align-items: center; }
+  #arcadeMenu button kbd, #gameMenu button kbd { font: 12px var(--mono); color: var(--muted); }
+  #gameMenu button:focus-visible, #gameMenu button:hover, #arcadeMenu button:focus-visible, #arcadeMenu button:hover { border-color: var(--accent); outline: none; background: rgba(255, 255, 255, .06); }
+  #arcadeMenu .foot, #gameMenu .foot { line-height: 1.6; margin: 6px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -71,6 +71,18 @@
     <button id="listBtn" type="button">All games</button>
     <button id="addBtn" type="button">+ Add game</button>
     <button id="soundBtn" type="button">Sound on</button>
+  </div>
+</div>
+
+<div id="arcadeMenu" hidden role="dialog" aria-modal="true" aria-labelledby="amTitle">
+  <div class="box">
+    <h2 id="amTitle">FLINT ARCADE · PAUSED</h2>
+    <p class="name" id="amRoom"></p>
+    <button type="button" id="amResume">▶ Resume <kbd>Esc</kbd></button>
+    <button type="button" id="amList">☰ All games <kbd>G</kbd></button>
+    <button type="button" id="amAdd">+ Add a game <kbd>A</kbd></button>
+    <button type="button" id="amSound">♪ Sound on <kbd>M</kbd></button>
+    <p class="foot">WASD walk · mouse looks · E or click plays a cabinet<br>↑ ↓ to choose · Enter to pick</p>
   </div>
 </div>
 
@@ -381,12 +393,16 @@ class Arcade extends Scene3D {
     this.attachPointer();
   }
   exit() { this.detachPointer(); }
+  // the browser unlocks the mouse when you press Esc: that opens the arcade menu
+  pointerUnlocked() { if (this.state === 'walk') openArcadeMenu(); }
 
-  // drag to look (mouse, or right side of a touch screen); left side of a touch screen is a joystick
+  // mouse: click to lock it, then just move it to look (drag-to-look if the browser won't lock it);
+  // touch: left side of the screen is a joystick, right side drags to look
   attachPointer() {
     const el = this.game.canvas, ptrs = new Map();
     this._down = (e) => {
       const p = this.game.toLogical(e.clientX, e.clientY);
+      if (e.pointerType === 'mouse' && !this.input.pointerLocked && this.state === 'walk' && this.input.lockPointer()) { ptrs.set(e.pointerId, { role: 'lock', sx: p.x, sy: p.y, x: p.x, y: p.y, travel: 99 }); return; }
       const role = e.pointerType === 'touch' && p.x < this.width * 0.45 ? 'move' : 'look';
       ptrs.set(e.pointerId, { role, sx: p.x, sy: p.y, x: p.x, y: p.y, travel: 0 });
       if (role === 'move') this.stick = { x: p.x, y: p.y, dx: 0, dy: 0 };
@@ -395,7 +411,7 @@ class Arcade extends Scene3D {
       const s = ptrs.get(e.pointerId); if (!s) return;
       const p = this.game.toLogical(e.clientX, e.clientY);
       s.travel += Math.hypot(p.x - s.x, p.y - s.y);
-      if (s.role === 'look') { this.look.dx += p.x - s.x; this.look.dy += p.y - s.y; }
+      if (s.role === 'look' && !this.input.pointerLocked) { this.look.dx += p.x - s.x; this.look.dy += p.y - s.y; }
       else if (this.stick) { this.stick.dx = clamp(p.x - s.sx, -50, 50); this.stick.dy = clamp(p.y - s.sy, -50, 50); }
       s.x = p.x; s.y = p.y;
     };
@@ -403,7 +419,7 @@ class Arcade extends Scene3D {
       const s = ptrs.get(e.pointerId); if (!s) return;
       ptrs.delete(e.pointerId);
       if (s.role === 'move') this.stick = null;
-      else if (s.travel < 8) this.tapped = true;
+      else if (s.role === 'look' && s.travel < 8) this.tapped = true;
     };
     el.addEventListener('pointerdown', this._down);
     addEventListener('pointermove', this._move);
@@ -451,6 +467,7 @@ class Arcade extends Scene3D {
     this.hintAlpha = Math.max(0, this.hintAlpha - dt / 12);
 
     // look
+    if (input.pointerLocked) { this.look.dx += input.mouseDelta.x; this.look.dy += input.mouseDelta.y; }
     this.yaw += this.look.dx * 0.0045 + input.axis('turnL', 'turnR') * 2.2 * dt;
     this.pitch = clamp(this.pitch - this.look.dy * 0.0035, -1.1, 1.1);
     this.look.dx = this.look.dy = 0;
@@ -496,6 +513,7 @@ class Arcade extends Scene3D {
     game.switch(arcade, { fade: 0.7, color: ROOMS[door.to].bg });
   }
   launch(cab) {
+    this.input.unlockPointer();
     this.state = 'zoom';
     this.saved = { x: this.pos.x, z: this.pos.z, yaw: this.yaw, pitch: this.pitch };
     this.audio.sfx('powerup');
@@ -550,7 +568,7 @@ class Arcade extends Scene3D {
       }
     }
     if (this.hintAlpha > 0 && this.state === 'walk') {
-      const msg = isTouch() ? 'left thumb walks · right thumb looks · tap a cabinet' : 'WASD / arrows walk · drag mouse to look · E to play';
+      const msg = isTouch() ? 'left thumb walks · right thumb looks · tap a cabinet' : this.input.pointerLocked ? 'WASD / arrows walk · move the mouse to look · E or click to play · Esc menu' : 'click to look around with the mouse · WASD / arrows walk · E to play · Esc menu';
       t(msg, W / 2, H - (this.focus ? 150 : 40), { size: clamp(W / 32, 10, 13), align: 'center', color: '#ffffff', alpha: Math.min(1, this.hintAlpha * 3) });
     }
     if (this.stick) {
@@ -587,6 +605,7 @@ function closeGame() {
   frame.src = 'about:blank';
   game.start();
   if (arcade && arcade.state === 'zoom') arcade.returnFromGame();
+  if (arcade && !isTouch()) arcade.input.lockPointer();
 }
 
 // ── the in-game menu: Esc while playing (games send it through arcade-bridge.js) ──
@@ -621,15 +640,49 @@ menu.addEventListener('keydown', (e) => {
   else if (e.key === 'q' || e.key === 'Q') closeGame();
 });
 menu.addEventListener('click', (e) => { if (e.target === menu) closeMenu(); });
+// ── the arcade's own menu: Esc while walking around (the browser unlocks the mouse first) ──
+const amenu = $('arcadeMenu');
+function amSoundLabel() { $('amSound').firstChild.textContent = game.audio.muted ? '♪ Sound off ' : '♪ Sound on '; }
+function openArcadeMenu() {
+  if (!player.hidden || !amenu.hidden || !arcade) return;
+  if (arcade.state === 'walk') arcade.state = 'menu';
+  arcade.input.unlockPointer();
+  const room = ROOMS[arcade.roomIndex];
+  $('amRoom').textContent = room.name.toLowerCase();
+  amenu.style.setProperty('--accent', room.glow);
+  amSoundLabel();
+  amenu.hidden = false;
+  $('amResume').focus();
+}
+function closeArcadeMenu(relock = true) {
+  if (amenu.hidden) return;
+  amenu.hidden = true;
+  if (arcade && arcade.state === 'menu') arcade.state = 'walk';
+  if (relock && !isTouch() && arcade) arcade.input.lockPointer();
+}
+$('amResume').addEventListener('click', () => closeArcadeMenu());
+$('amList').addEventListener('click', () => { closeArcadeMenu(false); renderList(); openPanel($('listPanel')); });
+$('amAdd').addEventListener('click', () => { closeArcadeMenu(false); $('addBtn').click(); });
+$('amSound').addEventListener('click', () => { game.audio.unlock(); game.audio.toggleMute(); updateSoundBtn(); amSoundLabel(); });
+amenu.addEventListener('keydown', (e) => {
+  const items = [...amenu.querySelectorAll('button')], i = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+  else if (e.key === 'g' || e.key === 'G') $('amList').click();
+  else if (e.key === 'a' || e.key === 'A') $('amAdd').click();
+  else if (e.key === 'm' || e.key === 'M') $('amSound').click();
+});
+amenu.addEventListener('click', (e) => { if (e.target === amenu) closeArcadeMenu(); });
+
 // a game asked for the menu (it saw Esc)
 addEventListener('message', (e) => {
   if (e.source !== frame.contentWindow || !e.data || e.data.type !== 'flint-arcade:menu') return;
-  toggleMenu();
+  openMenu();
 });
 
 const panels = [$('listPanel'), $('addPanel')];
 function closePanels() { panels.forEach((p) => (p.hidden = true)); if (arcade && arcade.state === 'menu') arcade.state = 'walk'; }
 function openPanel(p) {
+  if (arcade) arcade.input.unlockPointer();
   closePanels(); p.hidden = false;
   if (arcade && arcade.state === 'walk') arcade.state = 'menu';
   const first = p.querySelector('input, button'); if (first) first.focus();
@@ -637,7 +690,10 @@ function openPanel(p) {
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closePanels));
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (!player.hidden) { e.preventDefault(); toggleMenu(); } else if (panels.some((p) => !p.hidden)) closePanels();
+  if (!player.hidden) { e.preventDefault(); toggleMenu(); }
+  else if (!amenu.hidden) { e.preventDefault(); closeArcadeMenu(); }
+  else if (panels.some((p) => !p.hidden)) closePanels();
+  else if (arcade && arcade.state === 'walk') { e.preventDefault(); openArcadeMenu(); }
 });
 
 function renderList() {

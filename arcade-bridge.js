@@ -41,6 +41,9 @@
     try { window.parent.postMessage({ type: 'flint-arcade:menu' }, '*'); } catch (e) { /* no arcade */ }
   }
 
+  // games that lock the mouse call this when the lock is released (the browser swallows that Esc)
+  window.FlintArcade = { inArcade: true, openMenu: askForMenu };
+
   // capture on window runs before any of the game's own handlers, so the game never sees this Esc
   window.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape' && e.code !== 'Escape') return;
